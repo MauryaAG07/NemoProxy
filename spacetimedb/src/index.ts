@@ -1,8 +1,10 @@
 // NemoProxy SpacetimeDB module (TypeScript, SpacetimeDB 2.x).
 //
 // Tables + reducers the FastAPI backend calls. Reducer names are exact:
-// backend/spacetime_client.py calls POST /api/{db}/reducer/<name> with
+// backend/spacetime_client.py must call them at the SpacetimeDB 2.x
+// endpoint POST /v1/database/<database-identity>/call/<name> with
 // create_incident, update_incident_verdict, add_evidence, propose_action.
+// (Its old /api/{db}/reducer/<name> path returns 404 on a 2.x server.)
 //
 // NOTE: this does NOT use the older decorator API (@spacetimedb.table(),
 // @spacetimedb.reducer(), @spacetimedb/spacetimedb package). That package
