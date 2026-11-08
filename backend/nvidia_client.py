@@ -127,17 +127,23 @@ async def dispatch_tool_execution(
 
     if tool_name == "get_domain_context":
         domain = args.get("domain", domain_fixture.get("domain", "unknown"))
+        # Return ONLY raw fixture fields. The fixture's interpretive strings
+        # (brand_alignment, reverse_proxy_indicator_note) are NOT passed to
+        # Nemotron as tool output — the model must do the interpreting, and
+        # the expected verdict must never be leaked to it.
         result = {
             "domain": domain,
             "domain_age_days": domain_fixture.get("domain_age_days"),
             "registered_date": domain_fixture.get("registered_date"),
             "registrar": domain_fixture.get("registrar"),
             "hosting_asn": domain_fixture.get("hosting_asn"),
-            "brand_alignment": domain_fixture.get("brand_alignment"),
-            "reverse_proxy_indicator_note": domain_fixture.get("reverse_proxy_indicator_note"),
+            "hosting_provider": domain_fixture.get("hosting_provider"),
             "is_simulated": domain_fixture.get("is_simulated", True)
         }
-        summary = f"Domain '{domain}' inspected: Age {result['domain_age_days']} days, Registrar: {result['registrar']}. {result['brand_alignment']}"
+        summary = (
+            f"Domain '{domain}' inspected: Age {result['domain_age_days']} days, "
+            f"Registrar: {result['registrar']}, ASN: {result['hosting_asn']}."
+        )
         await spacetime_add_evidence(
             evidence_id=evidence_id,
             incident_id=incident_id,
@@ -163,12 +169,12 @@ async def dispatch_tool_execution(
         return {"evidence_id": evidence_id, "result": rep_data}
 
     elif tool_name == "get_incident_evidence":
-        current_state = get_current_state()
+        current_state = await get_current_state()
         items = [e for e in current_state["evidence_items"] if e["incident_id"] == incident_id]
         return {"evidence_id": evidence_id, "evidence_count": len(items), "items": items}
 
     elif tool_name == "get_sandbox_session_status":
-        sess = get_sandbox_session()
+        sess = await get_sandbox_session()
         summary = f"Sandbox subscriber status: {sess.get('status')} on {sess.get('device_label')}. SIM Freeze: {sess.get('sim_freeze_enabled')}."
         await spacetime_add_evidence(
             evidence_id=evidence_id,
@@ -244,7 +250,12 @@ async def run_nemotron_investigation(
                 scenario_key=scenario_key
             )
         except Exception as e:
-            logger.error(f"Live Nemotron API call failed ({e}). Falling back to bounded simulation loop with explicit labeling.")
+            # Live failure: do NOT return a simulated verdict as the incident
+            # outcome. Propagate so the pipeline marks the incident "failed"
+            # with an explicit live_failure flag. The simulated loop below
+            # runs ONLY in explicit demo mode (DEMO_MODE=true).
+            logger.error(f"Live Nemotron API call failed ({str(e) or type(e).__name__}). Not falling back to simulation.")
+            raise
 
     # Bounded simulation workflow (reproducible, honest, citing evidence IDs)
     return await _run_simulated_bounded_loop(
@@ -478,6 +489,9 @@ async def _run_live_nemotron_loop(
                 "evidence_citations": []
             }
 
-    return await _run_simulated_bounded_loop(
-        incident_id, sanitized_message, primary_domain, domain_fixture, primary_url, scenario_key
+    # Live loop exhausted its rounds without a final assessment from the
+    # model. Do not substitute a simulated verdict — report the failure so
+    # the pipeline marks the incident "failed".
+    raise RuntimeError(
+        f"Live Nemotron loop ended after {max_rounds} rounds without a final assessment for incident {incident_id}."
     )
