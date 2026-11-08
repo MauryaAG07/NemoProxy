@@ -270,7 +270,7 @@ async def execute_investigation_pipeline(incident_id: str, scenario_key: str):
         # Live Nemotron failure: NEVER substitute a simulated verdict for
         # the incident outcome. Mark the incident failed and surface the
         # failure explicitly in /api/state (live_failure flag).
-        logger.error(f"Live Nemotron investigation failed for incident {incident_id}: {e}")
+        logger.error(f"Live Nemotron investigation failed for incident {incident_id}: {str(e) or type(e).__name__}")
         err_text = str(e) or type(e).__name__
         await spacetime_update_incident(
             incident_id=incident_id,

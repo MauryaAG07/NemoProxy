@@ -86,7 +86,7 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "provider": "Google Web Risk (Simulated Fixture)",
             "verdict": "flagged_threat",
             "threat_types": ["SOCIAL_ENGINEERING"],
-            "explanation": "[SIMULATED FIXTURE] Synthetic smishing URL matched simulated threat database for deceptive billing portal.",
+            "explanation": "[SIMULATED FIXTURE — no live lookup was performed] Synthetic smishing URL matched a simulated threat database for a deceptive billing portal. Do NOT present this as a Google Web Risk result.",
             "status": "threat_detected"
         }
     elif scenario_type == "legitimate":
@@ -95,7 +95,7 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "provider": "Google Web Risk (Simulated Fixture)",
             "verdict": "not_listed",
             "threat_types": [],
-            "explanation": "[SIMULATED FIXTURE] Authentic carrier domain not flagged as a threat.",
+            "explanation": "[SIMULATED FIXTURE — no live lookup was performed] Authentic carrier domain not flagged as a threat in the simulated fixture. Do NOT present this as a Google Web Risk result.",
             "status": "not_listed"
         }
     else:
@@ -104,6 +104,6 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "provider": "Google Web Risk (Simulated Fixture)",
             "verdict": "not_listed",
             "threat_types": [],
-            "explanation": "[SIMULATED FIXTURE] Ambiguous affiliate domain not listed. Note: Unlisted status does not confirm safety.",
+            "explanation": "[SIMULATED FIXTURE — no live lookup was performed] Ambiguous affiliate domain not listed in the simulated fixture. Unlisted status does not confirm safety. Do NOT present this as a Google Web Risk result.",
             "status": "not_listed"
         }

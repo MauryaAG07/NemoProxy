@@ -59,7 +59,7 @@ from .spacetime_client import (
 logger = logging.getLogger("nemo_proxy.nvidia")
 
 # ---------------------------------------------------------------------------
-# Budgets (Phase C §5). Defaults: 6 rounds, 12 tool calls, 60 s wall clock.
+# Budgets (Phase C §5). Defaults: 6 rounds, 12 tool calls, 120 s wall clock.
 # Env-overridable via config.py (INVESTIGATION_MAX_ROUNDS /
 # INVESTIGATION_MAX_TOOL_CALLS / INVESTIGATION_TIMEOUT_SECONDS).
 # ---------------------------------------------------------------------------
@@ -495,7 +495,13 @@ async def dispatch_tool_execution(
         items = [e for e in current_state["evidence_items"] if e["incident_id"] == incident_id]
         state["evidence_seen"] = True
         state["evidence_grounded"] = True
-        return {"evidence_id": evidence_id, "evidence_count": len(items), "items": items}
+        # Read-only: this call creates NO evidence row, so it returns no
+        # evidence_id of its own. An earlier version returned one and the
+        # live model cited it — validation rightly rejected it, since the ID
+        # does not exist as a recorded evidence item. The citable IDs are
+        # the evidence_id fields inside items.
+        return {"evidence_count": len(items), "items": items,
+                "citable_evidence_ids": [e["evidence_id"] for e in items]}
 
     elif tool_name == "get_sandbox_session_status":
         sess = await get_sandbox_session()
@@ -567,6 +573,13 @@ async def _existing_evidence_ids(incident_id: str) -> List[str]:
     return [e["evidence_id"] for e in current_state["evidence_items"] if e["incident_id"] == incident_id]
 
 
+async def _simulated_evidence_ids(incident_id: str) -> set:
+    """Recorded evidence IDs for this incident that are simulated fixtures."""
+    current_state = await get_current_state()
+    return {e["evidence_id"] for e in current_state["evidence_items"]
+            if e["incident_id"] == incident_id and e.get("is_simulated")}
+
+
 async def validate_assessment(assessment: Dict[str, Any], incident_id: str) -> StructuredAssessment:
     """Validate a model-produced assessment dict: schema + evidence-ID
     references must exist for this incident + recovery IDs must be known.
@@ -581,6 +594,25 @@ async def validate_assessment(assessment: Dict[str, Any], incident_id: str) -> S
         raise ValueError(f"Assessment references evidence IDs that do not exist for this incident: {unknown}")
     if not parsed.evidence_ids:
         raise ValueError("Assessment must cite at least one evidence ID recorded for this incident")
+    # Provenance: an assessment that cites simulated evidence must label it
+    # simulated in its own words. A live run once wrote a simulated fixture
+    # up as a live Google Web Risk flag; this check rejects that wording and
+    # the loop's correction retry asks the model to fix it.
+    cited_simulated = [eid for eid in parsed.evidence_ids
+                       if eid in await _simulated_evidence_ids(incident_id)]
+    if cited_simulated:
+        provenance_text = " ".join([
+            parsed.explanation,
+            *[f"{c.claim} {c.domain_evidence} {c.reputation_evidence} {c.resolution}"
+              for c in parsed.conflicts_resolved],
+        ])
+        if "simulated" not in provenance_text.lower():
+            raise ValueError(
+                "Assessment cites simulated evidence "
+                f"({', '.join(cited_simulated)}) but never labels it simulated in the "
+                "explanation or cross-checks. State that the simulated evidence is a "
+                "simulated fixture, and never describe a simulated fixture as a live "
+                "provider result.")
     return parsed
 
 
@@ -865,7 +897,7 @@ async def _run_simulated_bounded_loop(
         assessment = StructuredAssessment(
             concern_level="suspicious",
             explanation=(
-                f"Assessment based on [{', '.join(evidence_citations)}]: Claimed carrier billing notification directs to "
+                f"Assessment based on simulated evidence [{', '.join(evidence_citations)}]: Claimed carrier billing notification directs to "
                 f"unaffiliated domain '{primary_domain}' registered {domain_fixture.get('domain_age_days')} days ago. "
                 + ("The message also tried to instruct the agent (injection attempt), which was refused and flagged. " if injection_detected else "")
                 + "Domain registration age and brand mismatch are strong indicators of smishing; "
@@ -877,7 +909,7 @@ async def _run_simulated_bounded_loop(
             conflicts_resolved=[CrossCheck(
                 claim="Message claims to be a carrier billing notice requiring immediate payment",
                 domain_evidence=f"Domain '{primary_domain}' is {domain_fixture.get('domain_age_days')} days old, registrar {domain_fixture.get('registrar')}, ASN {domain_fixture.get('hosting_asn')} — no affiliation with the carrier's enterprise infrastructure",
-                reputation_evidence=f"Reputation provider verdict: {rep_verdict}",
+                reputation_evidence=f"Reputation verdict: {rep_verdict} (simulated fixture)",
                 resolution="Claim conflicts with domain and reputation evidence: the sender is not the carrier it claims to be; treat as suspected phishing.",
             )],
             recommended_next_step="Do not click the link; check the bill in the official carrier app and report the message.",
@@ -890,7 +922,7 @@ async def _run_simulated_bounded_loop(
         assessment = StructuredAssessment(
             concern_level="low",
             explanation=(
-                f"Assessment based on [{', '.join(evidence_citations)}]: Message references official enterprise carrier portal "
+                f"Assessment based on simulated evidence [{', '.join(evidence_citations)}]: Message references official enterprise carrier portal "
                 f"'{primary_domain}' (age {domain_fixture.get('domain_age_days')} days, registered to MarkMonitor). "
                 f"No brand mismatch or deceptive urgency detected."
             ),
@@ -899,7 +931,7 @@ async def _run_simulated_bounded_loop(
             conflicts_resolved=[CrossCheck(
                 claim="Message claims to be a carrier payment receipt with a link to the billing statement",
                 domain_evidence=f"Domain '{primary_domain}' is {domain_fixture.get('domain_age_days')} days old, registrar {domain_fixture.get('registrar')}, ASN {domain_fixture.get('hosting_asn')} — consistent with the carrier's enterprise infrastructure",
-                reputation_evidence=f"Reputation provider verdict: {rep_verdict}",
+                reputation_evidence=f"Reputation verdict: {rep_verdict} (simulated fixture)",
                 resolution="Claim agrees with domain and reputation evidence: no conflict; low concern.",
             )],
             recommended_next_step="No action needed; if unsure, verify the payment in the official carrier app, not via the link.",
@@ -912,7 +944,7 @@ async def _run_simulated_bounded_loop(
         assessment = StructuredAssessment(
             concern_level="inconclusive",
             explanation=(
-                f"Assessment based on [{', '.join(evidence_citations)}]: Message points to third-party subdomain "
+                f"Assessment based on simulated evidence [{', '.join(evidence_citations)}]: Message points to third-party subdomain "
                 f"'{primary_domain}'. Domain age is moderate ({domain_fixture.get('domain_age_days')} days) and provider "
                 f"reputation is unlisted. The evidence does not settle whether this is an authorized promotional affiliate or an unauthorized smishing attempt, so no guess is made."
             ),
@@ -923,7 +955,7 @@ async def _run_simulated_bounded_loop(
             conflicts_resolved=[CrossCheck(
                 claim="Message claims a rewards voucher from a carrier partner",
                 domain_evidence=f"Domain '{primary_domain}' is {domain_fixture.get('domain_age_days')} days old on a third-party apex domain — neither the carrier's domain nor a known look-alike",
-                reputation_evidence=f"Reputation provider verdict: {rep_verdict} (unlisted is not proof of safety)",
+                reputation_evidence=f"Reputation verdict: {rep_verdict} (simulated fixture; unlisted is not proof of safety)",
                 resolution="Unresolved conflict: domain and reputation evidence neither confirm the partner claim nor prove malicious intent — inconclusive, with the unknowns named.",
             )],
             recommended_next_step="Do not click; verify the voucher in the official carrier app or by contacting the carrier directly.",
@@ -985,6 +1017,11 @@ async def _run_live_nemotron_loop(
         "exists or that a session was stolen. "
         "You MUST cross-check three sources — the message claims, the domain fixture, and the reputation result — "
         "and resolve conflicts explicitly in the assessment's conflicts_resolved section. "
+        "PROVENANCE RULE: every tool result tells you whether it is a live provider result or a simulated fixture. "
+        "Label simulated fixtures as simulated in your explanation and cross-checks, and never describe a simulated "
+        "fixture as a live Google Web Risk or other provider result. If you cite simulated evidence, your explanation "
+        "must use the word 'simulated'. "
+        "Always select applicable recovery steps from the catalog (recovery_step_ids), even when the concern is low. "
         "If the evidence does not settle the question, return concern_level 'inconclusive' with the unknowns named — do not guess. "
         "You MUST call get_incident_evidence before producing your final assessment, so it is grounded in recorded evidence. "
         "Your final answer MUST be a single JSON object matching this schema (no extra prose, no 0-100 probability, no confidence number): "
@@ -1033,7 +1070,9 @@ async def _run_live_nemotron_loop(
             or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
         )
         verify = os.environ.get("SSL_CERT_FILE") or True
-        async with httpx.AsyncClient(timeout=30, trust_env=False, proxy=proxy_url, verify=verify) as client:
+        # 60 s per call: the live model can take 30+ s on a single slow turn
+        # (one injection run died on the old 30 s limit with a ReadTimeout).
+        async with httpx.AsyncClient(timeout=60, trust_env=False, proxy=proxy_url, verify=verify) as client:
             resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -1072,7 +1111,8 @@ async def _run_live_nemotron_loop(
             if _loop_state(incident_id)["evidence_grounded"] and budget.rounds_used >= 3:
                 messages.append({"role": "user", "content": (
                     "You have gathered the evidence. Provide your final JSON assessment now, "
-                    "citing only evidence IDs returned by the tools. Do not call any more tools.")})
+                    "citing only evidence IDs returned by the tools. Include recovery_step_ids "
+                    "from the catalog. Do not call any more tools.")})
                 force_final = True
             continue
 
@@ -1159,6 +1199,13 @@ async def _run_live_nemotron_loop(
                  "reason": validated.explanation[:500]},
                 incident_id, domain_fixture, scenario_key,
                 budget=budget, primary_domain=primary_domain, primary_url=primary_url)
+        if not validated.recovery_step_ids:
+            # The model may return no recovery steps; fall back to the
+            # reviewed catalog selection for this scenario's exposure (the
+            # same default the simulated loop uses) so the customer
+            # checklist is never empty.
+            validated.recovery_step_ids = RECOVERY_STEPS_BY_SCENARIO.get(
+                scenario_key, ["step_review_recent_activity", "step_review_carrier_protections"])
         if validated.recovery_step_ids:
             await dispatch_tool_execution(
                 "select_recovery_steps", {"step_ids": validated.recovery_step_ids},
