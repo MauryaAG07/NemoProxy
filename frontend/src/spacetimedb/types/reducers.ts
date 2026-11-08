@@ -6,23 +6,27 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
-import AddEvidenceReducer from "../add_evidence_reducer";
+import ApproveActionReducer from "../approve_action_reducer";
 import CreateIncidentReducer from "../create_incident_reducer";
-import CreateSandboxSessionReducer from "../create_sandbox_session_reducer";
+import CreateSessionReducer from "../create_session_reducer";
+import InjectCompromiseReducer from "../inject_compromise_reducer";
 import PingReducer from "../ping_reducer";
 import ProposeActionReducer from "../propose_action_reducer";
-import RevokeSandboxSessionReducer from "../revoke_sandbox_session_reducer";
-import ToggleSimFreezeReducer from "../toggle_sim_freeze_reducer";
-import TriggerCompromiseReducer from "../trigger_compromise_reducer";
-import UpdateIncidentVerdictReducer from "../update_incident_verdict_reducer";
+import PublishAssessmentReducer from "../publish_assessment_reducer";
+import RecordEvidenceReducer from "../record_evidence_reducer";
+import ResetDemoRunReducer from "../reset_demo_run_reducer";
+import RevokeSessionReducer from "../revoke_session_reducer";
+import UpdateInvestigationProgressReducer from "../update_investigation_progress_reducer";
 
-export type AddEvidenceParams = __Infer<typeof AddEvidenceReducer>;
+export type ApproveActionParams = __Infer<typeof ApproveActionReducer>;
 export type CreateIncidentParams = __Infer<typeof CreateIncidentReducer>;
-export type CreateSandboxSessionParams = __Infer<typeof CreateSandboxSessionReducer>;
+export type CreateSessionParams = __Infer<typeof CreateSessionReducer>;
+export type InjectCompromiseParams = __Infer<typeof InjectCompromiseReducer>;
 export type PingParams = __Infer<typeof PingReducer>;
 export type ProposeActionParams = __Infer<typeof ProposeActionReducer>;
-export type RevokeSandboxSessionParams = __Infer<typeof RevokeSandboxSessionReducer>;
-export type ToggleSimFreezeParams = __Infer<typeof ToggleSimFreezeReducer>;
-export type TriggerCompromiseParams = __Infer<typeof TriggerCompromiseReducer>;
-export type UpdateIncidentVerdictParams = __Infer<typeof UpdateIncidentVerdictReducer>;
+export type PublishAssessmentParams = __Infer<typeof PublishAssessmentReducer>;
+export type RecordEvidenceParams = __Infer<typeof RecordEvidenceReducer>;
+export type ResetDemoRunParams = __Infer<typeof ResetDemoRunReducer>;
+export type RevokeSessionParams = __Infer<typeof RevokeSessionReducer>;
+export type UpdateInvestigationProgressParams = __Infer<typeof UpdateInvestigationProgressReducer>;
 

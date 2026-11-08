@@ -34,85 +34,115 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
-import AddEvidenceReducer from "./add_evidence_reducer";
+import ApproveActionReducer from "./approve_action_reducer";
 import CreateIncidentReducer from "./create_incident_reducer";
-import CreateSandboxSessionReducer from "./create_sandbox_session_reducer";
+import CreateSessionReducer from "./create_session_reducer";
+import InjectCompromiseReducer from "./inject_compromise_reducer";
 import PingReducer from "./ping_reducer";
 import ProposeActionReducer from "./propose_action_reducer";
-import RevokeSandboxSessionReducer from "./revoke_sandbox_session_reducer";
-import ToggleSimFreezeReducer from "./toggle_sim_freeze_reducer";
-import TriggerCompromiseReducer from "./trigger_compromise_reducer";
-import UpdateIncidentVerdictReducer from "./update_incident_verdict_reducer";
+import PublishAssessmentReducer from "./publish_assessment_reducer";
+import RecordEvidenceReducer from "./record_evidence_reducer";
+import ResetDemoRunReducer from "./reset_demo_run_reducer";
+import RevokeSessionReducer from "./revoke_session_reducer";
+import UpdateInvestigationProgressReducer from "./update_investigation_progress_reducer";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
-import EvidenceItemRow from "./evidence_item_table";
-import IncidentRow from "./incident_table";
-import ProposedActionRow from "./proposed_action_table";
-import SandboxSessionRow from "./sandbox_session_table";
+import CustomerSessionViewRow from "./customer_session_view_table";
+import EvidenceRow from "./evidence_table";
+import InvestigationStatusRow from "./investigation_status_table";
+import MessageEventRow from "./message_event_table";
+import OperatorSessionViewRow from "./operator_session_view_table";
+import ResponseActionRow from "./response_action_table";
 
 /** Type-only namespace exports for generated type groups. */
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
-  evidenceItem: __table({
-    name: 'evidence_item',
+  evidence: __table({
+    name: 'evidence',
     indexes: [
-      { accessor: 'evidence_id', name: 'evidence_item_evidence_id_idx_btree', algorithm: 'btree', columns: [
+      { accessor: 'evidence_id', name: 'evidence_evidence_id_idx_btree', algorithm: 'btree', columns: [
         'evidenceId',
       ] },
-    ],
-    constraints: [
-      { name: 'evidence_item_evidence_id_key', constraint: 'unique', columns: ['evidenceId'] },
-    ],
-  }, EvidenceItemRow),
-  incident: __table({
-    name: 'incident',
-    indexes: [
-      { accessor: 'incident_id', name: 'incident_incident_id_idx_btree', algorithm: 'btree', columns: [
+      { accessor: 'incident_id', name: 'evidence_incident_id_idx_btree', algorithm: 'btree', columns: [
         'incidentId',
       ] },
     ],
     constraints: [
-      { name: 'incident_incident_id_key', constraint: 'unique', columns: ['incidentId'] },
+      { name: 'evidence_evidence_id_key', constraint: 'unique', columns: ['evidenceId'] },
     ],
-  }, IncidentRow),
-  proposedAction: __table({
-    name: 'proposed_action',
+  }, EvidenceRow),
+  investigationStatus: __table({
+    name: 'investigation_status',
     indexes: [
-      { accessor: 'action_id', name: 'proposed_action_action_id_idx_btree', algorithm: 'btree', columns: [
+      { accessor: 'incident_id', name: 'investigation_status_incident_id_idx_btree', algorithm: 'btree', columns: [
+        'incidentId',
+      ] },
+    ],
+    constraints: [
+      { name: 'investigation_status_incident_id_key', constraint: 'unique', columns: ['incidentId'] },
+    ],
+  }, InvestigationStatusRow),
+  messageEvent: __table({
+    name: 'message_event',
+    indexes: [
+      { accessor: 'incident_id', name: 'message_event_incident_id_idx_btree', algorithm: 'btree', columns: [
+        'incidentId',
+      ] },
+    ],
+    constraints: [
+      { name: 'message_event_incident_id_key', constraint: 'unique', columns: ['incidentId'] },
+    ],
+  }, MessageEventRow),
+  responseAction: __table({
+    name: 'response_action',
+    indexes: [
+      { accessor: 'action_id', name: 'response_action_action_id_idx_btree', algorithm: 'btree', columns: [
         'actionId',
       ] },
-    ],
-    constraints: [
-      { name: 'proposed_action_action_id_key', constraint: 'unique', columns: ['actionId'] },
-    ],
-  }, ProposedActionRow),
-  sandboxSession: __table({
-    name: 'sandbox_session',
-    indexes: [
-      { accessor: 'session_id', name: 'sandbox_session_session_id_idx_btree', algorithm: 'btree', columns: [
-        'sessionId',
+      { accessor: 'idempotency_key', name: 'response_action_idempotency_key_idx_btree', algorithm: 'btree', columns: [
+        'idempotencyKey',
+      ] },
+      { accessor: 'incident_id', name: 'response_action_incident_id_idx_btree', algorithm: 'btree', columns: [
+        'incidentId',
       ] },
     ],
     constraints: [
-      { name: 'sandbox_session_session_id_key', constraint: 'unique', columns: ['sessionId'] },
+      { name: 'response_action_action_id_key', constraint: 'unique', columns: ['actionId'] },
+      { name: 'response_action_idempotency_key_key', constraint: 'unique', columns: ['idempotencyKey'] },
     ],
-  }, SandboxSessionRow),
+  }, ResponseActionRow),
+  customerSessionView: __table({
+    name: 'customer_session_view',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, CustomerSessionViewRow),
+  operatorSessionView: __table({
+    name: 'operator_session_view',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, OperatorSessionViewRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
-  __reducerSchema("add_evidence", AddEvidenceReducer),
+  __reducerSchema("approve_action", ApproveActionReducer),
   __reducerSchema("create_incident", CreateIncidentReducer),
-  __reducerSchema("create_sandbox_session", CreateSandboxSessionReducer),
+  __reducerSchema("create_session", CreateSessionReducer),
+  __reducerSchema("inject_compromise", InjectCompromiseReducer),
   __reducerSchema("ping", PingReducer),
   __reducerSchema("propose_action", ProposeActionReducer),
-  __reducerSchema("revoke_sandbox_session", RevokeSandboxSessionReducer),
-  __reducerSchema("toggle_sim_freeze", ToggleSimFreezeReducer),
-  __reducerSchema("trigger_compromise", TriggerCompromiseReducer),
-  __reducerSchema("update_incident_verdict", UpdateIncidentVerdictReducer),
+  __reducerSchema("publish_assessment", PublishAssessmentReducer),
+  __reducerSchema("record_evidence", RecordEvidenceReducer),
+  __reducerSchema("reset_demo_run", ResetDemoRunReducer),
+  __reducerSchema("revoke_session", RevokeSessionReducer),
+  __reducerSchema("update_investigation_progress", UpdateInvestigationProgressReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
@@ -121,12 +151,16 @@ const proceduresSchema = __procedures(
 
 type __SchemaWithTableAccessorAliases = Omit<typeof tablesSchema.schemaType, "tables"> & {
   tables: typeof tablesSchema.schemaType.tables & {
-    /** @deprecated Use `evidenceItem` instead. This alias will be removed in the next major version. */
-    readonly "evidence_item": Omit<typeof tablesSchema.schemaType.tables["evidenceItem"], "accessorName"> & { readonly accessorName: "evidence_item" };
-    /** @deprecated Use `proposedAction` instead. This alias will be removed in the next major version. */
-    readonly "proposed_action": Omit<typeof tablesSchema.schemaType.tables["proposedAction"], "accessorName"> & { readonly accessorName: "proposed_action" };
-    /** @deprecated Use `sandboxSession` instead. This alias will be removed in the next major version. */
-    readonly "sandbox_session": Omit<typeof tablesSchema.schemaType.tables["sandboxSession"], "accessorName"> & { readonly accessorName: "sandbox_session" };
+    /** @deprecated Use `investigationStatus` instead. This alias will be removed in the next major version. */
+    readonly "investigation_status": Omit<typeof tablesSchema.schemaType.tables["investigationStatus"], "accessorName"> & { readonly accessorName: "investigation_status" };
+    /** @deprecated Use `messageEvent` instead. This alias will be removed in the next major version. */
+    readonly "message_event": Omit<typeof tablesSchema.schemaType.tables["messageEvent"], "accessorName"> & { readonly accessorName: "message_event" };
+    /** @deprecated Use `responseAction` instead. This alias will be removed in the next major version. */
+    readonly "response_action": Omit<typeof tablesSchema.schemaType.tables["responseAction"], "accessorName"> & { readonly accessorName: "response_action" };
+    /** @deprecated Use `customerSessionView` instead. This alias will be removed in the next major version. */
+    readonly "customer_session_view": Omit<typeof tablesSchema.schemaType.tables["customerSessionView"], "accessorName"> & { readonly accessorName: "customer_session_view" };
+    /** @deprecated Use `operatorSessionView` instead. This alias will be removed in the next major version. */
+    readonly "operator_session_view": Omit<typeof tablesSchema.schemaType.tables["operatorSessionView"], "accessorName"> & { readonly accessorName: "operator_session_view" };
   };
 };
 
@@ -145,9 +179,11 @@ const REMOTE_MODULE = {
 >;
 
 const tableAccessorAliases = {
-  "evidence_item": "evidenceItem",
-  "proposed_action": "proposedAction",
-  "sandbox_session": "sandboxSession",
+  "investigation_status": "investigationStatus",
+  "message_event": "messageEvent",
+  "response_action": "responseAction",
+  "customer_session_view": "customerSessionView",
+  "operator_session_view": "operatorSessionView",
 } as const;
 
 function __withTableAccessorAliases<T extends object>(target: T, freeze = false): T {
@@ -168,22 +204,30 @@ function __withTableAccessorAliases<T extends object>(target: T, freeze = false)
 
 type __DbViewBase = __DbConnectionImpl<typeof REMOTE_MODULE>["db"];
 export type DbView = __DbViewBase & {
-  /** @deprecated Use `evidenceItem` instead. This alias will be removed in the next major version. */
-  readonly "evidence_item": __DbViewBase["evidenceItem"];
-  /** @deprecated Use `proposedAction` instead. This alias will be removed in the next major version. */
-  readonly "proposed_action": __DbViewBase["proposedAction"];
-  /** @deprecated Use `sandboxSession` instead. This alias will be removed in the next major version. */
-  readonly "sandbox_session": __DbViewBase["sandboxSession"];
+  /** @deprecated Use `investigationStatus` instead. This alias will be removed in the next major version. */
+  readonly "investigation_status": __DbViewBase["investigationStatus"];
+  /** @deprecated Use `messageEvent` instead. This alias will be removed in the next major version. */
+  readonly "message_event": __DbViewBase["messageEvent"];
+  /** @deprecated Use `responseAction` instead. This alias will be removed in the next major version. */
+  readonly "response_action": __DbViewBase["responseAction"];
+  /** @deprecated Use `customerSessionView` instead. This alias will be removed in the next major version. */
+  readonly "customer_session_view": __DbViewBase["customerSessionView"];
+  /** @deprecated Use `operatorSessionView` instead. This alias will be removed in the next major version. */
+  readonly "operator_session_view": __DbViewBase["operatorSessionView"];
 };
 
 type __TablesBase = __QueryBuilder<typeof tablesSchema.schemaType>;
 export type Tables = __TablesBase & {
-  /** @deprecated Use `evidenceItem` instead. This alias will be removed in the next major version. */
-  readonly "evidence_item": __TablesBase["evidenceItem"];
-  /** @deprecated Use `proposedAction` instead. This alias will be removed in the next major version. */
-  readonly "proposed_action": __TablesBase["proposedAction"];
-  /** @deprecated Use `sandboxSession` instead. This alias will be removed in the next major version. */
-  readonly "sandbox_session": __TablesBase["sandboxSession"];
+  /** @deprecated Use `investigationStatus` instead. This alias will be removed in the next major version. */
+  readonly "investigation_status": __TablesBase["investigationStatus"];
+  /** @deprecated Use `messageEvent` instead. This alias will be removed in the next major version. */
+  readonly "message_event": __TablesBase["messageEvent"];
+  /** @deprecated Use `responseAction` instead. This alias will be removed in the next major version. */
+  readonly "response_action": __TablesBase["responseAction"];
+  /** @deprecated Use `customerSessionView` instead. This alias will be removed in the next major version. */
+  readonly "customer_session_view": __TablesBase["customerSessionView"];
+  /** @deprecated Use `operatorSessionView` instead. This alias will be removed in the next major version. */
+  readonly "operator_session_view": __TablesBase["operatorSessionView"];
 };
 
 /** The tables available in this remote SpacetimeDB module. Each table reference doubles as a query builder. */

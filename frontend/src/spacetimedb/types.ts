@@ -10,46 +10,71 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export const EvidenceItem = __t.object("EvidenceItem", {
+export const CustomerSessionView = __t.object("CustomerSessionView", {});
+export type CustomerSessionView = __Infer<typeof CustomerSessionView>;
+
+export const Evidence = __t.object("Evidence", {
   evidenceId: __t.string(),
   incidentId: __t.string(),
-  sourceTool: __t.string(),
+  type: __t.string(),
+  result: __t.string(),
+  source: __t.string(),
   isSimulated: __t.bool(),
-  summary: __t.string(),
-  rawJson: __t.string(),
+  observedAt: __t.timestamp(),
 });
-export type EvidenceItem = __Infer<typeof EvidenceItem>;
+export type Evidence = __Infer<typeof Evidence>;
 
-export const Incident = __t.object("Incident", {
+export const InvestigationStatus = __t.object("InvestigationStatus", {
   incidentId: __t.string(),
-  scenarioId: __t.string(),
-  redactedMessage: __t.string(),
-  status: __t.string(),
-  verdict: __t.string(),
-  confidenceBand: __t.string(),
-  summary: __t.string(),
-  createdAt: __t.timestamp(),
-});
-export type Incident = __Infer<typeof Incident>;
-
-export const ProposedAction = __t.object("ProposedAction", {
-  actionId: __t.string(),
-  incidentId: __t.string(),
-  actionType: __t.string(),
-  reason: __t.string(),
-  status: __t.string(),
-});
-export type ProposedAction = __Infer<typeof ProposedAction>;
-
-export const SandboxSession = __t.object("SandboxSession", {
-  sessionId: __t.string(),
-  accountId: __t.string(),
-  deviceLabel: __t.string(),
-  phoneMasked: __t.string(),
-  status: __t.string(),
-  simFreezeEnabled: __t.bool(),
-  revocationReason: __t.string(),
+  phase: __t.string(),
+  concernLevel: __t.string(),
+  explanation: __t.string(),
+  unknowns: __t.string(),
+  version: __t.u64(),
   updatedAt: __t.timestamp(),
 });
-export type SandboxSession = __Infer<typeof SandboxSession>;
+export type InvestigationStatus = __Infer<typeof InvestigationStatus>;
+
+export const MessageEvent = __t.object("MessageEvent", {
+  incidentId: __t.string(),
+  ownerId: __t.string(),
+  sanitizedMessage: __t.string(),
+  scenarioId: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type MessageEvent = __Infer<typeof MessageEvent>;
+
+export const OperatorSessionView = __t.object("OperatorSessionView", {});
+export type OperatorSessionView = __Infer<typeof OperatorSessionView>;
+
+export const ResponseAction = __t.object("ResponseAction", {
+  actionId: __t.string(),
+  incidentId: __t.string(),
+  sessionId: __t.string(),
+  type: __t.string(),
+  approvalState: __t.string(),
+  executionState: __t.string(),
+  idempotencyKey: __t.string(),
+  receipt: __t.string(),
+});
+export type ResponseAction = __Infer<typeof ResponseAction>;
+
+export const Session = __t.object("Session", {
+  sessionId: __t.string(),
+  ownerId: __t.string(),
+  credentialHash: __t.string(),
+  state: __t.string(),
+  expiry: __t.u64(),
+  revokedAt: __t.u64(),
+});
+export type Session = __Infer<typeof Session>;
+
+export const SessionView = __t.object("SessionView", {
+  sessionId: __t.string(),
+  ownerId: __t.string(),
+  state: __t.string(),
+  expiry: __t.u64(),
+  revokedAt: __t.u64(),
+});
+export type SessionView = __Infer<typeof SessionView>;
 
