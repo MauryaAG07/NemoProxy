@@ -1,0 +1,1 @@
+{"dependencies":{"spacetimedb":"^2.14.1"},"devDependencies":{"typescript":"^5.5.4"},"main":"src/index.ts","name":"nemo-proxy-db","private":true,"scripts":{"typecheck":"tsc --noEmit"},"version":"1.0.0"}

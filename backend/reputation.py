@@ -1,3 +1,4 @@
+import os
 import httpx
 from typing import Dict, Any
 from .config import settings
@@ -21,7 +22,16 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "threatTypes": ["SOCIAL_ENGINEERING", "MALWARE", "UNWANTED_SOFTWARE"]
         }
         try:
-            async with httpx.AsyncClient(timeout=settings.request_timeout_sec) as client:
+            # Same proxy/CA handling as the Nemotron client: explicit proxy
+            # + verify from the environment (httpx's trust_env=True crashes
+            # on bracketed IPv6 NO_PROXY entries; trust_env=False ignores
+            # SSL_CERT_FILE).
+            proxy_url = (
+                os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+                or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+            )
+            verify = os.environ.get("SSL_CERT_FILE") or True
+            async with httpx.AsyncClient(timeout=settings.request_timeout_sec, trust_env=False, proxy=proxy_url, verify=verify) as client:
                 res = await client.get(api_url, params=params)
                 if res.status_code == 200:
                     data = res.json()
@@ -76,7 +86,7 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "provider": "Google Web Risk (Simulated Fixture)",
             "verdict": "flagged_threat",
             "threat_types": ["SOCIAL_ENGINEERING"],
-            "explanation": "[SIMULATED FIXTURE] Synthetic smishing URL matched simulated threat database for deceptive billing portal.",
+            "explanation": "[SIMULATED FIXTURE — no live lookup was performed] Synthetic smishing URL matched a simulated threat database for a deceptive billing portal. Do NOT present this as a Google Web Risk result.",
             "status": "threat_detected"
         }
     elif scenario_type == "legitimate":
@@ -85,7 +95,7 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "provider": "Google Web Risk (Simulated Fixture)",
             "verdict": "not_listed",
             "threat_types": [],
-            "explanation": "[SIMULATED FIXTURE] Authentic carrier domain not flagged as a threat.",
+            "explanation": "[SIMULATED FIXTURE — no live lookup was performed] Authentic carrier domain not flagged as a threat in the simulated fixture. Do NOT present this as a Google Web Risk result.",
             "status": "not_listed"
         }
     else:
@@ -94,6 +104,6 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "provider": "Google Web Risk (Simulated Fixture)",
             "verdict": "not_listed",
             "threat_types": [],
-            "explanation": "[SIMULATED FIXTURE] Ambiguous affiliate domain not listed. Note: Unlisted status does not confirm safety.",
+            "explanation": "[SIMULATED FIXTURE — no live lookup was performed] Ambiguous affiliate domain not listed in the simulated fixture. Unlisted status does not confirm safety. Do NOT present this as a Google Web Risk result.",
             "status": "not_listed"
         }
