@@ -223,7 +223,7 @@ export async function fetchIncidentResult(
     const data = await fetchJson('/api/state')
     const incidents = (data.incidents ?? []) as Record<string, unknown>[]
     const inc = incidents.find((i) => i.incident_id === incidentId)
-    if (!inc || (inc.status !== 'assessed' && inc.status !== 'incomplete')) return null
+    if (!inc || (inc.status !== 'assessed' && inc.status !== 'incomplete' && inc.status !== 'failed')) return null
     const evidence = ((data.evidence_items ?? []) as Record<string, unknown>[])
       .filter((e) => e.incident_id === incidentId)
       .map((e, i): EvidenceItem => {
@@ -257,7 +257,7 @@ export async function fetchIncidentResult(
       assessment,
       recoverySteps,
     } as const
-    if (inc.status === 'incomplete') {
+    if (inc.status === 'incomplete' || inc.status === 'failed') {
       return {
         ...base,
         verdict: 'insufficient_evidence',
@@ -265,7 +265,9 @@ export async function fetchIncidentResult(
         summary: split[0].trim() || summary,
         uncertainty:
           String(inc.unknowns ?? '') ||
-          'The investigation ran out of budget before a validated assessment could be produced.',
+          (inc.status === 'failed'
+            ? 'The live model call failed before a validated assessment could be produced. Nothing was substituted for the missing verdict.'
+            : 'The investigation ran out of budget before a validated assessment could be produced.'),
         incomplete: true,
         incompleteReason: String(inc.unknowns ?? '') || summary,
       }

@@ -25,9 +25,9 @@ export const SCENARIOS: Scenario[] = [
     id: 'carrier-billing',
     title: 'Suspicious carrier billing message',
     tag: 'Suspicious',
-    sender: 'NorthStar Mobile (claimed)',
+    sender: 'T-Mobile (claimed)',
     backendKey: 'phishing',
-    text: 'NorthStar Mobile: Your bill of $87.40 is overdue. Pay now to avoid service suspension: https://northstar-billing.example/pay?acct=NM-4821 — reply STOP to opt out.',
+    text: 'T-Mobile: Your bill of $87.40 is overdue. Pay now to avoid service suspension: https://northstar-billing.example/pay?acct=NM-4821 — reply STOP to opt out.',
     expectedVerdict: 'suspected_phishing',
     expectedNote:
       'Link domain does not match the carrier’s known domain, urgency + payment request, and the billing link is on a look-alike host. Indicators only — not proof of a reverse proxy or a stolen session.',
