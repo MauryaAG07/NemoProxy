@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import type { SharedState, InvestigationResult, EvidenceItem, SandboxSession } from './types'
+import type { SharedState, InvestigationResult, EvidenceItem, SandboxSession, Verdict } from './types'
 import { SCENARIOS } from './scenarios'
 import { connectSpacetime, SPACETIME_HOST, type SpacetimeStatus } from '../spacetimedb/client'
-import type { Incident as SpacetimeIncident, EvidenceItem as SpacetimeEvidence, SandboxSession as SpacetimeSession } from '../spacetimedb/types'
+import type { MessageEvent as SpacetimeMessageEvent, InvestigationStatus as SpacetimeStatusRow, Evidence as SpacetimeEvidence, SessionView as SpacetimeSessionView } from '../spacetimedb/types'
 import { MOCK_MODE } from './api'
 
 // Two synchronized demo views (spec: React + SpacetimeDB SDK).
@@ -11,8 +11,13 @@ import { MOCK_MODE } from './api'
 //
 // When VITE_SPACETIMEDB_HOST is set (and the app is in live mode), the
 // views stay in sync through a real DbConnection subscription to the
-// incident / evidence_item / sandbox_session tables of the published
-// `nemo-proxy` database. BroadcastChannel is then NOT used.
+// public spec §5 tables (message_event, investigation_status, evidence)
+// plus the identity-scoped customer_session_view of the published
+// `nemo-proxy` database. An incident row is the JOIN of a message_event
+// row and its investigation_status row by incident_id. The private
+// `session` table is never subscribed to — session state reaches the UI
+// through the backend's /api/state instead (see src/lib/api.ts).
+// BroadcastChannel is then NOT used.
 //
 // When no SpacetimeDB host is configured (mock mode, or live mode without
 // a host), the two views fall back to a BroadcastChannel (same browser,
@@ -36,20 +41,32 @@ function requestedActionFor(backendKey: string): string {
   return 'Claim a voucher via a link'
 }
 
-function mapVerdict(v: string): InvestigationResult['verdict'] {
+/**
+ * The §5 investigation_status table has no verdict column: the backend
+ * writes the verdict as a machine-readable first line of `explanation`
+ * ("verdict=<verdict>\n<summary>"). Parse it back here for the direct
+ * subscription path (/api/state already strips it server-side). An
+ * assessed row with no prefix has no recorded verdict — return null
+ * rather than inventing one from free text.
+ */
+export function parseAssessment(explanation: string): { verdict: Verdict | null; summary: string } {
+  const m = /^verdict=([a-z_]+)\n/.exec(explanation || '')
+  if (!m) return { verdict: null, summary: explanation || '' }
+  const verdict = mapVerdict(m[1])
+  return { verdict, summary: explanation.slice(m[0].length) }
+}
+
+function mapVerdict(v: string): Verdict | null {
   if (v === 'benign_indicator') return 'legitimate_looking'
   if (v === 'insufficient_evidence') return 'insufficient_evidence'
-  return 'suspected_phishing'
+  if (v === 'suspected_phishing') return 'suspected_phishing'
+  return null
 }
 
 function mapConfidence(band: string): 'low' | 'medium' | 'high' {
   if (band === 'high') return 'high'
   if (band === 'medium') return 'medium'
   return 'low'
-}
-
-function toMillis(ts: { toMillis: () => bigint }): number {
-  return Number(ts.toMillis())
 }
 
 export type SyncSource = 'spacetimedb' | 'broadcast'
@@ -65,6 +82,8 @@ export function useSharedState() {
   const stateRef = useRef(state)
   stateRef.current = state
   const evidenceRef = useRef<Map<string, EvidenceItem>>(new Map())
+  const eventRef = useRef<Map<string, SpacetimeMessageEvent>>(new Map())
+  const statusRef = useRef<Map<string, SpacetimeStatusRow>>(new Map())
 
   // Evidence is cached per incident; clear it when a new investigation starts.
   const activeIncidentId = state.incident?.id
@@ -93,19 +112,49 @@ export function useSharedState() {
           setSyncSource('broadcast')
         }
       },
-      onIncident: (row: SpacetimeIncident) => {
+      onMessageEvent: (row: SpacetimeMessageEvent) => {
+        eventRef.current.set(row.incidentId, row)
         const currentId = stateRef.current.incident?.id
         if (!currentId || row.incidentId !== currentId) return
-        const result = buildResult(row, [...evidenceRef.current.values()])
+        // The event arrived (or re-arrived); if the assessment is already
+        // in, rebuild the result with the event's scenario info.
+        const status = statusRef.current.get(row.incidentId)
+        if (!status || status.phase !== 'assessed') return
+        const result = buildResult(row, status, [...evidenceRef.current.values()])
+        if (!result) return
         setState((prev) => {
           if (!prev.incident || prev.incident.id !== row.incidentId) return prev
           return {
             ...prev,
-            incident: {
-              ...prev.incident,
-              status: row.status === 'assessed' ? 'complete' : 'investigating',
-              result: row.status === 'assessed' ? result : prev.incident.result,
-            },
+            incident: { ...prev.incident, status: 'complete', result },
+            version: prev.version + 1,
+          }
+        })
+      },
+      onInvestigationStatus: (row: SpacetimeStatusRow) => {
+        statusRef.current.set(row.incidentId, row)
+        const currentId = stateRef.current.incident?.id
+        if (!currentId || row.incidentId !== currentId) return
+        const event = eventRef.current.get(row.incidentId)
+        if (!event) return
+        if (row.phase !== 'assessed') {
+          setState((prev) => {
+            if (!prev.incident || prev.incident.id !== row.incidentId) return prev
+            return {
+              ...prev,
+              incident: { ...prev.incident, status: 'investigating' },
+              version: prev.version + 1,
+            }
+          })
+          return
+        }
+        const result = buildResult(event, row, [...evidenceRef.current.values()])
+        if (!result) return
+        setState((prev) => {
+          if (!prev.incident || prev.incident.id !== row.incidentId) return prev
+          return {
+            ...prev,
+            incident: { ...prev.incident, status: 'complete', result },
             version: prev.version + 1,
           }
         })
@@ -115,8 +164,8 @@ export function useSharedState() {
         if (!currentId || row.incidentId !== currentId) return
         const item: EvidenceItem = {
           id: row.evidenceId,
-          label: row.sourceTool,
-          detail: row.summary,
+          label: row.type,
+          detail: row.result,
           source: row.isSimulated === false ? 'live' : 'simulated',
           limitation: 'A single tool result does not prove a reverse proxy or session theft.',
         }
@@ -134,31 +183,35 @@ export function useSharedState() {
           }
         })
       },
-      onSession: (row: SpacetimeSession) => {
+      onSession: (row: SpacetimeSessionView) => {
         const local = stateRef.current.session
-        // Only mirror the DB session when there is no local session yet,
-        // or when the DB reports a real state change (compromised/revoked).
-        // Never let a stale 'active' row overwrite a locally compromised
-        // or revoked session (the backend session endpoints do not write
-        // to SpacetimeDB yet — see BACKEND_CONTRACT.md).
+        // Only mirror the view's session when there is no local session
+        // yet, or when the view reports a real state change
+        // (compromised/revoked). Never let a stale 'active' row overwrite
+        // a locally compromised or revoked session.
         if (local && row.sessionId === local.id) {
-          if (row.status === 'active' && (local.state === 'compromised' || local.state === 'revoked')) return
+          if (row.state === 'active' && (local.state === 'compromised' || local.state === 'revoked')) return
         } else if (local) {
           return
         }
         const session: SandboxSession = {
           id: row.sessionId,
-          accountLabel: `${row.deviceLabel} · ${row.accountId} (fictional, sandbox only)`,
+          accountLabel: `${row.ownerId} (fictional, sandbox only)`,
           state:
-            row.status === 'revoked'
+            row.state === 'revoked'
               ? 'revoked'
-              : row.status === 'compromised_sim'
+              : row.state === 'compromised_sim'
                 ? 'compromised'
-                : row.status === 'active'
+                : row.state === 'active'
                   ? 'active'
                   : 'none',
-          createdAt: toMillis(row.updatedAt),
-          revokedAt: row.status === 'revoked' ? toMillis(row.updatedAt) : undefined,
+          createdAt: Date.now(),
+          revokedAt:
+            row.state === 'revoked' && row.revokedAt > 0n
+              ? Number(row.revokedAt)
+              : row.state === 'revoked'
+                ? Date.now()
+                : undefined,
           mode: 'live',
         }
         setState((prev) => ({ ...prev, session, version: prev.version + 1 }))
@@ -200,22 +253,26 @@ export function useSharedState() {
 }
 
 function buildResult(
-  row: SpacetimeIncident,
+  event: SpacetimeMessageEvent,
+  status: SpacetimeStatusRow,
   evidence: EvidenceItem[],
-): InvestigationResult {
-  const scenario = SCENARIOS.find((s) => s.backendKey === row.scenarioId)
-  const summary = row.summary || ''
+): InvestigationResult | null {
+  const scenario = SCENARIOS.find((s) => s.backendKey === event.scenarioId)
+  const { verdict, summary } = parseAssessment(status.explanation)
+  // No recorded verdict in the row: do not present a result yet.
+  if (!verdict) return null
   const split = summary.split('UNCERTAINTY BOUNDARY:')
   return {
-    incidentId: row.incidentId,
-    verdict: mapVerdict(row.verdict),
-    confidence: mapConfidence(row.confidenceBand),
-    claimedOrg: scenario?.sender ?? row.scenarioId,
-    requestedAction: requestedActionFor(row.scenarioId),
+    incidentId: event.incidentId,
+    verdict,
+    confidence: mapConfidence(status.concernLevel),
+    claimedOrg: scenario?.sender ?? event.scenarioId,
+    requestedAction: requestedActionFor(event.scenarioId),
     summary: split[0].trim() || summary,
     uncertainty:
       (split[1] ?? '').trim() ||
-      'Domain age, hosting and brand mismatch are indicators, not proof a reverse proxy exists or a session was stolen.',
+      (status.unknowns.trim() ||
+        'Domain age, hosting and brand mismatch are indicators, not proof a reverse proxy exists or a session was stolen.'),
     evidence: evidence.filter((e) => e.id),
     mode: 'live',
     reputationUrlNote:

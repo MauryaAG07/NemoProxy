@@ -1,21 +1,53 @@
 import type { EvidenceItem, InvestigationResult, SandboxSession, Verdict } from './types'
 
-// Backend contract — verified against MauryaAG07/NemoProxy main @ 06f9ed8b
-// (backend/main.py, backend/incident.py, backend/spacetime_client.py):
+// Backend contract — spec §5 (verified against the rewritten backend in
+// backend/ and the SpacetimeDB module in spacetimedb/src/index.ts):
 //   GET  /api/health                       -> { status, demo_mode, credentials_status }
 //   GET  /api/scenarios                    -> [{ key, id, name, raw_message, target_domain }]
 //   POST /api/ingest { scenario }          -> { incident_id, status: 'queued' }
-//        scenario is one of 'phishing' | 'legitimate' | 'ambiguous'
+//        scenario is one of 'phishing' | 'legitimate' | 'ambiguous' | 'injection'
 //        (a browser-supplied user_id is ignored for ownership)
 //   GET  /api/state                        -> { incidents, evidence_items,
 //                                              proposed_actions, sandbox_sessions }
-//        incident: { incident_id, scenario_id, status: 'investigating'|'assessed',
-//                    verdict: 'suspected_phishing'|'benign_indicator'|'insufficient_evidence',
-//                    confidence_band: 'low'|'medium'|'high', summary, redacted_message }
-//        evidence item: { evidence_id, incident_id, source_tool, is_simulated,
-//                         summary, raw_json }
+//        incident (message_event JOIN investigation_status):
+//          { incident_id, scenario_id, status: 'investigating'|'assessed'|'failed'|'incomplete',
+//            verdict: 'suspected_phishing'|'benign_indicator'|
+//                     'insufficient_evidence'|'pending',
+//            confidence_band: 'low'|'medium'|'high', summary, redacted_message,
+//            unknowns, assessment }
+//        'incomplete' (Phase C) = budget exhausted or unvalidatable model
+//        output: partial evidence kept, no verdict produced.
+//        assessment (Phase C, demo mode) = the validated structured
+//        assessment { concern_level, explanation, evidence_ids,
+//        missing_evidence, conflicts_resolved, recommended_next_step,
+//        proposed_action, recovery_step_ids, recovery_steps,
+//        injection_attempt_detected, injection_details, unknowns };
+//        live read-back carries null (no §5 column) and the key facts
+//        stay in the human-readable summary.
+//        The §5 investigation_status table has no verdict column, so the
+//        backend writes it as a "verdict=<v>" first line of the stored
+//        explanation and strips it again here; a row with no recorded
+//        verdict reads back as 'pending' and is treated as not ready.
+//        evidence item (evidence table): { evidence_id, incident_id,
+//          source_tool (= type), is_simulated, summary (= result),
+//          raw_json ('' on live read-back — the §5 table has no column) }
 //   POST /api/session/compromise           -> { session: { session_id, status: 'compromised_sim', ... } }
-//   POST /api/session/revoke { session_id }-> { session: { session_id, status: 'revoked', ... } }
+//   POST /api/session/revoke { session_id }-> { session: { session_id, status: 'revoked', ... },
+//                                              action_id, idempotency_key, receipt, source }
+//        (Phase B: revoke now runs the approved flow — propose → approve
+//        → revoke with one idempotency key — server-side.)
+//   POST /api/session/protect { session_id, reason?, idempotency_key? }
+//        -> same approved revocation, customer 'Protect demo account' action
+//   POST /api/session/issue                -> sets the HttpOnly
+//        'nemo_session' cookie (raw credential is ONLY in the cookie, never
+//        in the JSON body); -> { session_id, credential_issued, expires_at_ms }
+//   POST /api/session/reset                -> resets the demo run in
+//        SpacetimeDB, issues a fresh credential (new cookie)
+//   GET  /api/account/overview              -> fictional sandbox account
+//        overview; requires the session credential (cookie or Bearer).
+//        401 revoked/expired/wrong/missing, 503 SpacetimeDB unreachable.
+//   (POST /api/session/toggle_sim_freeze was removed in Phase A: the §5
+//   session table has no SIM-freeze column.)
 //
 // The backend keeps its own synthetic fixture per scenario key and redacts
 // it server-side; the frontend sends ONLY the scenario key, never a message
@@ -57,7 +89,7 @@ export function setMode(mode: 'live' | 'mock'): void {
   window.location.search = `mode=${mode}`
 }
 
-export type BackendScenarioKey = 'phishing' | 'legitimate' | 'ambiguous'
+export type BackendScenarioKey = 'phishing' | 'legitimate' | 'ambiguous' | 'injection'
 
 function url(path: string): string {
   return `${API_URL}${path}`
@@ -70,6 +102,30 @@ async function fetchJson(path: string, init?: RequestInit, timeoutMs = 5000) {
     const res = await fetch(url(path), { ...init, signal: ctrl.signal })
     if (!res.ok) throw new Error(`Backend ${res.status}`)
     return (await res.json()) as Record<string, unknown>
+  } finally {
+    clearTimeout(t)
+  }
+}
+
+/** Like fetchJson, but returns the HTTP status instead of throwing on
+ * 4xx/5xx — the protected-resource test needs to SHOW the 401/503, not
+ * hide it. Sends cookies (the HttpOnly session credential). */
+async function fetchStatus(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = 5000,
+): Promise<{ status: number; data: Record<string, unknown> | null }> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const res = await fetch(url(path), { ...init, signal: ctrl.signal, credentials: 'include' })
+    let data: Record<string, unknown> | null = null
+    try {
+      data = (await res.json()) as Record<string, unknown>
+    } catch {
+      data = null
+    }
+    return { status: res.status, data }
   } finally {
     clearTimeout(t)
   }
@@ -126,10 +182,12 @@ export async function createIncident(
   }
 }
 
-function mapVerdict(v: string): Verdict {
+function mapVerdict(v: string): Verdict | null {
   if (v === 'benign_indicator') return 'legitimate_looking'
   if (v === 'insufficient_evidence') return 'insufficient_evidence'
-  return 'suspected_phishing'
+  if (v === 'suspected_phishing') return 'suspected_phishing'
+  // 'pending' (or anything unknown): no recorded verdict — never invent one.
+  return null
 }
 
 function mapConfidence(band: string): 'low' | 'medium' | 'high' {
@@ -140,7 +198,10 @@ function mapConfidence(band: string): 'low' | 'medium' | 'high' {
 
 /** Poll GET /api/state for a finished result. Null = not ready / unreachable.
  * The result mode is 'live' only when the backend is NOT in demo mode;
- * a demo-mode backend returns simulated Nemotron results, labelled 'live-demo'. */
+ * a demo-mode backend returns simulated Nemotron results, labelled 'live-demo'.
+ * Phase C: an 'incomplete' incident (budget exhausted / unvalidatable
+ * output) is also terminal — it returns a result with incomplete=true and
+ * the partial evidence, never a faked verdict. */
 export async function fetchIncidentResult(
   incidentId: string,
   claimedOrg: string,
@@ -152,7 +213,7 @@ export async function fetchIncidentResult(
     const data = await fetchJson('/api/state')
     const incidents = (data.incidents ?? []) as Record<string, unknown>[]
     const inc = incidents.find((i) => i.incident_id === incidentId)
-    if (!inc || inc.status !== 'assessed') return null
+    if (!inc || (inc.status !== 'assessed' && inc.status !== 'incomplete')) return null
     const evidence = ((data.evidence_items ?? []) as Record<string, unknown>[])
       .filter((e) => e.incident_id === incidentId)
       .map((e, i): EvidenceItem => {
@@ -170,19 +231,44 @@ export async function fetchIncidentResult(
       })
     const summary = String(inc.summary ?? '')
     const split = summary.split('UNCERTAINTY BOUNDARY:')
-    return {
+    const assessment = (inc.assessment ?? null) as InvestigationResult['assessment']
+    const recoverySteps =
+      assessment && Array.isArray(assessment.recovery_steps)
+        ? assessment.recovery_steps
+        : []
+    const base = {
       incidentId,
-      verdict: mapVerdict(String(inc.verdict ?? '')),
-      confidence: mapConfidence(String(inc.confidence_band ?? 'low')),
       claimedOrg,
       requestedAction,
-      summary: split[0].trim() || summary,
-      uncertainty: (split[1] ?? '').trim() ||
-        'Domain age, hosting and brand mismatch are indicators, not proof a reverse proxy exists or a session was stolen.',
       evidence,
       mode: health.demoMode ? 'live-demo' : 'live',
       reputationUrlNote:
         'Reputation result, if any, applies to the redacted/modified URL, not the original.',
+      assessment,
+      recoverySteps,
+    } as const
+    if (inc.status === 'incomplete') {
+      return {
+        ...base,
+        verdict: 'insufficient_evidence',
+        confidence: 'low',
+        summary: split[0].trim() || summary,
+        uncertainty:
+          String(inc.unknowns ?? '') ||
+          'The investigation ran out of budget before a validated assessment could be produced.',
+        incomplete: true,
+        incompleteReason: String(inc.unknowns ?? '') || summary,
+      }
+    }
+    const verdict = mapVerdict(String(inc.verdict ?? ''))
+    if (!verdict) return null // Assessed but no recorded verdict yet — not ready.
+    return {
+      ...base,
+      verdict,
+      confidence: mapConfidence(String(inc.confidence_band ?? 'low')),
+      summary: split[0].trim() || summary,
+      uncertainty: (split[1] ?? '').trim() ||
+        'Domain age, hosting and brand mismatch are indicators, not proof a reverse proxy exists or a session was stolen.',
     }
   } catch {
     return null
@@ -195,8 +281,9 @@ function mapSession(s: Record<string, unknown>, mode: 'live' | 'mock'): SandboxS
     id: String(s.session_id ?? 'sess_demo_carrier_01'),
     accountLabel: `${String(s.device_label ?? 'Sandbox device')} · ${String(s.account_id ?? '')} (fictional, sandbox only)`,
     // Backend states are distinct: 'active' (normal), 'compromised_sim'
-    // (controlled simulated compromise), 'revoked'. Never collapse
-    // compromised_sim into 'active' or 'active' into 'none'.
+    // (controlled simulated compromise), 'revoked', 'expired'. Never
+    // collapse compromised_sim into 'active' or 'active' into 'none'.
+    // 'expired' has no UI state of its own — it is not a usable session.
     state:
       status === 'revoked'
         ? 'revoked'
@@ -235,6 +322,118 @@ export async function revokeSessionLive(
       body: JSON.stringify({ session_id: sessionId }),
     })
     const s = data.session as Record<string, unknown> | undefined
+    return s ? mapSession(s, 'live') : null
+  } catch {
+    return null
+  }
+}
+
+export interface ProtectResult {
+  session: SandboxSession
+  actionId: string
+  idempotencyKey: string
+  receipt: string
+  source: string
+}
+
+/** Customer 'Protect demo account': the approved propose → approve →
+ * revoke flow for THIS session, one idempotency key. Null = unreachable
+ * or the backend refused (e.g. SpacetimeDB down — never faked). */
+export async function protectDemoAccountLive(
+  sessionId: string,
+): Promise<ProtectResult | null> {
+  if (MOCK_MODE) return null
+  try {
+    const data = await fetchJson('/api/session/protect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    })
+    const s = data.session as Record<string, unknown> | undefined
+    if (!s) return null
+    return {
+      session: mapSession(s, 'live'),
+      actionId: String(data.action_id ?? ''),
+      idempotencyKey: String(data.idempotency_key ?? ''),
+      receipt: String(data.receipt ?? ''),
+      source: String(data.source ?? ''),
+    }
+  } catch {
+    return null
+  }
+}
+
+export interface ProtectedTestResult {
+  status: number
+  summary: string
+  source?: string
+}
+
+/** Test the protected resource (GET /api/account/overview). Returns the
+ * status code and a short summary even for 401/503 — the point of the
+ * control is to SHOW the denial after revocation. The raw credential
+ * is never read, shown, or stored here: it travels only in the
+ * HttpOnly cookie the browser sends. Null = backend unreachable. */
+export async function testProtectedResourceLive(): Promise<ProtectedTestResult | null> {
+  if (MOCK_MODE) return null
+  try {
+    const { status, data } = await fetchStatus('/api/account/overview')
+    if (status === 200 && data) {
+      return {
+        status,
+        summary:
+          `200 · fictional account ${String(data.account_id ?? '')} · ` +
+          `${String(data.plan_name ?? '')} · balance $${String(data.balance_due_usd ?? '')} · ` +
+          `data ${String(data.data_used_gb ?? '')}/${String(data.data_allowance_gb ?? '')} GB`,
+        source: String(data.verification_source ?? ''),
+      }
+    }
+    const detail =
+      data && typeof data.detail === 'string' ? data.detail : 'Protected resource denied.'
+    return { status, summary: `${status} · ${detail}` }
+  } catch {
+    return null
+  }
+}
+
+/** Issue a fresh demo session credential. The raw credential lands in
+ * the HttpOnly cookie only — this returns just the expiry. Null =
+ * unreachable or the backend refused (e.g. session revoked). */
+export async function issueSessionCredentialLive(): Promise<{ expiresAtMs: number } | null> {
+  if (MOCK_MODE) return null
+  try {
+    const { status, data } = await fetchStatus('/api/session/issue', { method: 'POST' })
+    if (status !== 200 || !data) return null
+    return { expiresAtMs: Number(data.expires_at_ms ?? 0) }
+  } catch {
+    return null
+  }
+}
+
+/** Reset the demo run: SpacetimeDB rows cleared, session active again,
+ * old credential invalidated, fresh credential issued (new cookie).
+ * Returns the fresh session, or null if unreachable/refused. */
+export async function resetDemoRunLive(): Promise<SandboxSession | null> {
+  if (MOCK_MODE) return null
+  try {
+    const { status, data } = await fetchStatus('/api/session/reset', { method: 'POST' })
+    if (status !== 200 || !data) return null
+    const s = data.session as Record<string, unknown> | undefined
+    return s ? mapSession(s, 'live') : null
+  } catch {
+    return null
+  }
+}
+
+/** Read the committed session state back from GET /api/state (source:
+ * SpacetimeDB rows in live mode). Used after protect/revoke/reset so
+ * both views show the committed outcome, not local state. */
+export async function fetchSessionStateLive(): Promise<SandboxSession | null> {
+  if (MOCK_MODE) return null
+  try {
+    const data = await fetchJson('/api/state')
+    const sessions = (data.sandbox_sessions ?? []) as Record<string, unknown>[]
+    const s = sessions.find((x) => String(x.session_id ?? '') === 'sess_demo_carrier_01') ?? sessions[0]
     return s ? mapSession(s, 'live') : null
   } catch {
     return null

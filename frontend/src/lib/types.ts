@@ -23,6 +23,36 @@ export interface EvidenceItem {
   limitation: string
 }
 
+export interface RecoveryStep {
+  id: string
+  label: string
+}
+
+export interface CrossCheck {
+  claim: string
+  domain_evidence: string
+  reputation_evidence: string
+  resolution: string
+}
+
+/** Phase C validated structured assessment (backend/nvidia_client.py).
+ * No 0–100 probability, no confidence number — concern is a band. */
+export interface StructuredAssessment {
+  concern_level: 'low' | 'suspicious' | 'high' | 'inconclusive'
+  explanation: string
+  evidence_ids: string[]
+  missing_evidence: string[]
+  conflicts_resolved: CrossCheck[]
+  recommended_next_step: string
+  proposed_action?: string | null
+  recovery_step_ids: string[]
+  recovery_steps: RecoveryStep[]
+  injection_attempt_detected: boolean
+  injection_details: string
+  unknowns: string
+  is_simulated?: boolean
+}
+
 export interface InvestigationResult {
   incidentId: string
   verdict: Verdict
@@ -37,6 +67,14 @@ export interface InvestigationResult {
    * so a live-mode result must NOT be labelled as a live Nemotron result. */
   mode: 'mock' | 'live' | 'live-demo'
   reputationUrlNote?: string
+  /** Phase C: validated structured assessment, when the backend served one. */
+  assessment?: StructuredAssessment | null
+  /** Phase C: recovery checklist selected for this subscriber's exposure. */
+  recoverySteps?: RecoveryStep[]
+  /** Phase C: budget exhausted / unvalidatable output — partial evidence
+   * kept, no verdict produced. */
+  incomplete?: boolean
+  incompleteReason?: string
 }
 
 export interface Incident {
