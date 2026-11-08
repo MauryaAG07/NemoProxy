@@ -14,7 +14,13 @@ import type { EvidenceItem, InvestigationResult, SandboxSession, Verdict } from 
 //            verdict: 'suspected_phishing'|'benign_indicator'|
 //                     'insufficient_evidence'|'pending',
 //            confidence_band: 'low'|'medium'|'high', summary, redacted_message,
-//            unknowns, assessment }
+//            unknowns, assessment,
+//            investigation_started_at_ms, investigation_finished_at_ms,
+//            investigation_duration_ms }
+//        Timings (spec §10): investigation_duration_ms is the server-side
+//        pipeline wall time in ms (null until the final assessment is
+//        published). fetchIncidentTiming reads the three fields so the
+//        frontend can show DB-to-client latency in the operator view.
 //        'incomplete' (Phase C) = budget exhausted or unvalidatable model
 //        output: partial evidence kept, no verdict produced.
 //        assessment (Phase C, demo mode) = the validated structured
@@ -201,7 +207,11 @@ function mapConfidence(band: string): 'low' | 'medium' | 'high' {
  * a demo-mode backend returns simulated Nemotron results, labelled 'live-demo'.
  * Phase C: an 'incomplete' incident (budget exhausted / unvalidatable
  * output) is also terminal — it returns a result with incomplete=true and
- * the partial evidence, never a faked verdict. */
+ * the partial evidence, never a faked verdict.
+ * Timings (spec §10): the incident also carries
+ * investigation_started_at_ms / investigation_finished_at_ms /
+ * investigation_duration_ms (server-side pipeline wall time, null until
+ * the final assessment is published). See fetchIncidentTiming. */
 export async function fetchIncidentResult(
   incidentId: string,
   claimedOrg: string,
@@ -269,6 +279,40 @@ export async function fetchIncidentResult(
       summary: split[0].trim() || summary,
       uncertainty: (split[1] ?? '').trim() ||
         'Domain age, hosting and brand mismatch are indicators, not proof a reverse proxy exists or a session was stolen.',
+    }
+  } catch {
+    return null
+  }
+}
+
+export interface IncidentTiming {
+  /** Server-side pipeline wall time (redaction + Nemotron loop + commit),
+   * in ms. Null until the final assessment is published, or when the
+   * backend predates the timing fields. */
+  investigationDurationMs: number | null
+  investigationStartedAtMs: number | null
+  investigationFinishedAtMs: number | null
+}
+
+/** Read one incident's server-side timings from GET /api/state (demo and
+ * live mode alike). Null = backend unreachable or incident not present.
+ * The caller uses investigationFinishedAtMs to measure DB-to-client
+ * latency: time from the server committing the assessment to this
+ * browser first seeing the result. */
+export async function fetchIncidentTiming(
+  incidentId: string,
+): Promise<IncidentTiming | null> {
+  if (MOCK_MODE) return null
+  try {
+    const data = await fetchJson('/api/state')
+    const incidents = (data.incidents ?? []) as Record<string, unknown>[]
+    const inc = incidents.find((i) => i.incident_id === incidentId)
+    if (!inc) return null
+    const num = (v: unknown): number | null => (typeof v === 'number' ? v : null)
+    return {
+      investigationDurationMs: num(inc.investigation_duration_ms),
+      investigationStartedAtMs: num(inc.investigation_started_at_ms),
+      investigationFinishedAtMs: num(inc.investigation_finished_at_ms),
     }
   } catch {
     return null
