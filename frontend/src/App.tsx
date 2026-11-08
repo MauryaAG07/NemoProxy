@@ -4,10 +4,25 @@ import SessionPanel from './components/SessionPanel'
 import { SCENARIOS, getScenario } from './lib/scenarios'
 import { redactPreview } from './lib/redaction'
 import { runMockInvestigation } from './lib/mockInvestigation'
-import { createIncident, fetchIncidentResult, revokeSessionLive, MOCK_MODE } from './lib/api'
+import {
+  createIncident,
+  fetchIncidentResult,
+  fetchScenarios,
+  checkBackend,
+  revokeSessionLive,
+  simulateCompromiseLive,
+  setMode,
+  MOCK_MODE,
+} from './lib/api'
 import { useSharedState } from './lib/sync'
 import { trySpacetimeConnect, SPACETIME_HOST, type SpacetimeStatus } from './spacetimedb/client'
 import type { SandboxSession } from './lib/types'
+
+function requestedActionFor(key: string): string {
+  if (key === 'phishing') return 'Pay an overdue bill via a link'
+  if (key === 'legitimate') return 'View a billing statement (no payment request in message)'
+  return 'Claim a voucher via a link'
+}
 
 export default function App() {
   const { state, update } = useSharedState()
@@ -16,11 +31,26 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [liveError, setLiveError] = useState('')
   const [spacetime, setSpacetime] = useState<SpacetimeStatus>('not_configured')
+  const [backendMessages, setBackendMessages] = useState<Record<string, string>>({})
+  const [backendHealthy, setBackendHealthy] = useState<boolean | null>(null)
   const scenario = getScenario(scenarioId)
   const incident = state.incident
+  // In live mode the backend investigates its own fixture for the scenario
+  // key; show that message instead of the frontend's local copy.
+  const displayText = !MOCK_MODE && backendMessages[scenario.backendKey]
+    ? backendMessages[scenario.backendKey]
+    : scenario.text
 
   useEffect(() => {
     trySpacetimeConnect().then(setSpacetime)
+    if (!MOCK_MODE) {
+      checkBackend().then(setBackendHealthy)
+      fetchScenarios().then((list) => {
+        if (list) {
+          setBackendMessages(Object.fromEntries(list.map((s) => [s.key, s.raw_message])))
+        }
+      })
+    }
   }, [])
 
   async function investigate(useMock: boolean) {
@@ -29,7 +59,7 @@ export default function App() {
     setStep('')
     const incidentId = useMock
       ? `mock-${crypto.randomUUID().slice(0, 8)}`
-      : (await createIncident(scenarioId)) ?? ''
+      : (await createIncident(scenario.backendKey)) ?? ''
     if (!useMock && !incidentId) {
       setLiveError(
         'Backend unreachable — no incident was created and no live result was faked. Run the labelled mock instead, or start the FastAPI backend on :8000.',
@@ -53,11 +83,15 @@ export default function App() {
       return
     }
 
-    // Live path: poll the backend; never fall back silently to mock.
+    // Live path: poll GET /api/state; never fall back silently to mock.
     setStep('Waiting for the backend investigation…')
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 1000))
-      const result = await fetchIncidentResult(incidentId)
+      const result = await fetchIncidentResult(
+        incidentId,
+        scenario.sender,
+        requestedActionFor(scenario.backendKey),
+      )
       if (result) {
         update((p) => ({
           ...p,
@@ -76,30 +110,49 @@ export default function App() {
     setBusy(false)
   }
 
-  function simulateSession() {
-    const session: SandboxSession = {
-      id: `sandbox-${crypto.randomUUID().slice(0, 8)}`,
-      accountLabel: 'Demo account alex@example.com (fictional, sandbox only)',
-      state: 'active',
-      createdAt: Date.now(),
-      mode: MOCK_MODE ? 'mock' : 'live',
+  async function simulateSession() {
+    if (MOCK_MODE) {
+      const session: SandboxSession = {
+        id: `sandbox-${crypto.randomUUID().slice(0, 8)}`,
+        accountLabel: 'Demo account alex@example.com (fictional, sandbox only)',
+        state: 'active',
+        createdAt: Date.now(),
+        mode: 'mock',
+      }
+      update((p) => ({ ...p, session }))
+      return
+    }
+    setBusy(true)
+    setLiveError('')
+    const session = await simulateCompromiseLive()
+    setBusy(false)
+    if (!session) {
+      setLiveError('Backend unreachable — no session compromise was simulated. Start the backend on :8000.')
+      return
     }
     update((p) => ({ ...p, session }))
   }
 
   async function revokeSession() {
     if (!state.session) return
+    if (MOCK_MODE) {
+      update((p) => ({
+        ...p,
+        session: p.session
+          ? { ...p.session, state: 'revoked', revokedAt: Date.now(), mode: 'mock' }
+          : p.session,
+      }))
+      return
+    }
     setBusy(true)
-    const live = await revokeSessionLive(state.session.id)
-    // Mock revocation is a labelled local state change, not a claim of a
-    // live SpacetimeDB reducer call.
-    update((p) => ({
-      ...p,
-      session: p.session
-        ? { ...p.session, state: 'revoked', revokedAt: Date.now(), mode: live ? 'live' : 'mock' }
-        : p.session,
-    }))
+    setLiveError('')
+    const session = await revokeSessionLive(state.session.id)
     setBusy(false)
+    if (!session) {
+      setLiveError('Backend unreachable — the session was NOT revoked. Start the backend on :8000 and try again.')
+      return
+    }
+    update((p) => ({ ...p, session }))
   }
 
   return (
@@ -116,6 +169,17 @@ export default function App() {
           <span className="rounded-full bg-amber-500 px-2 py-1 font-bold text-black">
             {MOCK_MODE ? 'MOCK MODE — simulated Nemotron / reputation' : 'LIVE MODE — backend required'}
           </span>
+          <button
+            onClick={() => setMode(MOCK_MODE ? 'live' : 'mock')}
+            className="rounded-full bg-sky-600 px-2 py-1 font-semibold text-white hover:bg-sky-500"
+          >
+            Switch to {MOCK_MODE ? 'live backend' : 'mock'} mode
+          </button>
+          {!MOCK_MODE && (
+            <span className="rounded-full bg-slate-700 px-2 py-1">
+              Backend: {backendHealthy === null ? 'checking…' : backendHealthy ? 'reachable on :8000' : 'NOT reachable'}
+            </span>
+          )}
           <span className="rounded-full bg-slate-700 px-2 py-1">
             SpacetimeDB:{' '}
             {spacetime === 'connected'
@@ -149,13 +213,25 @@ export default function App() {
             ))}
           </div>
           <div className="mt-3 rounded-lg bg-slate-800 p-3 text-sm">
-            <p className="text-slate-400">Message as received (synthetic, fictional):</p>
-            <p className="mt-1">{scenario.text}</p>
-            <p className="mt-3 text-slate-400">What is sent onward (server-side redaction preview):</p>
-            <p className="mt-1 text-slate-200">{redactPreview(scenario.text)}</p>
+            <p className="text-slate-400">
+              Message as received (synthetic, fictional)
+              {!MOCK_MODE && backendMessages[scenario.backendKey] ? ' — backend fixture' : ''}:
+            </p>
+            <p className="mt-1">{displayText}</p>
+            {MOCK_MODE ? (
+              <>
+                <p className="mt-3 text-slate-400">What is sent onward (server-side redaction preview):</p>
+                <p className="mt-1 text-slate-200">{redactPreview(scenario.text)}</p>
+              </>
+            ) : (
+              <p className="mt-3 text-xs text-slate-400">
+                Live mode sends only the scenario key ({scenario.backendKey}) to POST /api/ingest.
+                The backend redacts its own fixture message server-side before any third-party
+                call — not on-device processing, not complete anonymisation.
+              </p>
+            )}
             <p className="mt-2 text-xs text-slate-400">
-              Server-side redaction before third-party calls — not on-device processing, not
-              complete anonymisation. Only synthetic content is submitted in this demo.
+              Only synthetic content is submitted in this demo.
             </p>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
