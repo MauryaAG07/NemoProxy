@@ -63,7 +63,7 @@ class AppSettings(BaseModel):
     # Phase C (spec §4): investigation budgets for the Nemotron tool
     # loop. Env-overridable so a test can force budget exhaustion
     # (e.g. INVESTIGATION_MAX_TOOL_CALLS=2) without editing code.
-    investigation_max_rounds: int = Field(default_factory=lambda: int(os.getenv("INVESTIGATION_MAX_ROUNDS", "4")))
+    investigation_max_rounds: int = Field(default_factory=lambda: int(os.getenv("INVESTIGATION_MAX_ROUNDS", "6")))
     investigation_max_tool_calls: int = Field(default_factory=lambda: int(os.getenv("INVESTIGATION_MAX_TOOL_CALLS", "12")))
     investigation_timeout_seconds: float = Field(default_factory=lambda: float(os.getenv("INVESTIGATION_TIMEOUT_SECONDS", "60")))
 

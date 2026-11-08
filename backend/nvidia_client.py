@@ -59,11 +59,11 @@ from .spacetime_client import (
 logger = logging.getLogger("nemo_proxy.nvidia")
 
 # ---------------------------------------------------------------------------
-# Budgets (Phase C §5). Defaults: 4 rounds, 12 tool calls, 60 s wall clock.
+# Budgets (Phase C §5). Defaults: 6 rounds, 12 tool calls, 60 s wall clock.
 # Env-overridable via config.py (INVESTIGATION_MAX_ROUNDS /
 # INVESTIGATION_MAX_TOOL_CALLS / INVESTIGATION_TIMEOUT_SECONDS).
 # ---------------------------------------------------------------------------
-MAX_ROUNDS = 4  # kept as the module default; settings value wins at runtime
+MAX_ROUNDS = 6  # kept as the module default; settings value wins at runtime
 
 
 class BudgetExhausted(Exception):
@@ -643,6 +643,50 @@ async def _record_budget_exhaustion(incident_id: str, budget: Budget, reason: st
     }
 
 
+def _coerce_tool_args(args: Any) -> Dict[str, Any]:
+    """Tool arguments may arrive as a dict or a JSON string; anything else is rejected."""
+    if isinstance(args, dict):
+        return args
+    if isinstance(args, str):
+        try:
+            parsed = json.loads(args)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _content_tool_calls(text: str) -> List[tuple]:
+    """Parse a model message's content for an embedded function call.
+
+    Some OpenAI-compatible models (notably Nemotron on the integrate
+    endpoint with response_format json_object) serialize a function call as
+    the message CONTENT instead of the tool_calls field. Returns a list of
+    (name, args-dict), or [] when the content is not a tool-call-shaped
+    object. Accepted shapes: {"name", "arguments"}, {"function_call": {...}},
+    {"tool_calls": [{"function": {...}}]}.
+    """
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(obj, dict):
+        return []
+    calls: List[tuple] = []
+    if isinstance(obj.get("tool_calls"), list):
+        for tc in obj["tool_calls"]:
+            fn = (tc or {}).get("function", {}) if isinstance(tc, dict) else {}
+            if isinstance(fn, dict) and fn.get("name"):
+                calls.append((fn["name"], _coerce_tool_args(fn.get("arguments", {}))))
+    elif isinstance(obj.get("function_call"), dict):
+        fn = obj["function_call"]
+        if fn.get("name"):
+            calls.append((fn["name"], _coerce_tool_args(fn.get("arguments", {}))))
+    elif isinstance(obj.get("name"), str) and "arguments" in obj:
+        calls.append((obj["name"], _coerce_tool_args(obj["arguments"])))
+    return calls
+
+
 async def run_nemotron_investigation(
     incident_id: str,
     sanitized_message: str,
@@ -957,16 +1001,39 @@ async def _run_live_nemotron_loop(
     ]
 
     validation_attempts = 0
+    # response_format json_object suppresses tool calling in some Nemotron
+    # models (verified: nemotron-3.5-super-vl on the integrate endpoint
+    # emits real tool_calls only WITHOUT it, and fabricates tool results
+    # as content WITH it). So tool-gathering turns omit response_format;
+    # it is added only once we are asking for the final JSON assessment
+    # (after grounding, or on a validation retry).
+    final_attempt = False
+    # Some live models keep gathering tools forever instead of answering.
+    # Once the assessment is grounded and enough rounds are spent, the
+    # next call is forced to be a text-only final answer (force_final).
+    force_final = False
     while True:
         budget.begin_round()
         payload = {
             "model": model_id,
             "messages": messages,
             "tools": INVESTIGATION_TOOLS,
-            "tool_choice": "auto",
-            "response_format": {"type": "json_object"},
+            "tool_choice": "none" if force_final else "auto",
         }
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+        if final_attempt or force_final:
+            payload["response_format"] = {"type": "json_object"}
+        # External host: take the proxy and CA bundle from the environment
+        # explicitly. httpx's default trust_env=True crashes on this VM's
+        # NO_PROXY list (bracketed IPv6 entries -> "Invalid port: ':1]'"),
+        # and trust_env=False ignores SSL_CERT_FILE, breaking TLS through
+        # the egress proxy. Explicit proxy + verify avoids both; with no
+        # proxy env set this is a plain direct connection.
+        proxy_url = (
+            os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+            or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+        )
+        verify = os.environ.get("SSL_CERT_FILE") or True
+        async with httpx.AsyncClient(timeout=30, trust_env=False, proxy=proxy_url, verify=verify) as client:
             resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -997,11 +1064,45 @@ async def _run_live_nemotron_loop(
                     "name": fn_name,
                     "content": json.dumps(tool_output)
                 })
+            # Once the assessment is grounded in recorded evidence and a few
+            # rounds have been spent gathering, stop the model gathering
+            # forever: nudge it to answer, and force the next call to be a
+            # text-only final answer. The validated assessment still drives
+            # propose/select afterwards.
+            if _loop_state(incident_id)["evidence_grounded"] and budget.rounds_used >= 3:
+                messages.append({"role": "user", "content": (
+                    "You have gathered the evidence. Provide your final JSON assessment now, "
+                    "citing only evidence IDs returned by the tools. Do not call any more tools.")})
+                force_final = True
+            continue
+
+        # No tool_calls field — but the content may itself be a serialized
+        # function call (see _content_tool_calls). Dispatch it as a tool
+        # call and keep going; never validate the call itself as an
+        # assessment.
+        final_text = msg.get("content", "") or ""
+        if isinstance(final_text, list):
+            # Some models return content as parts [{"type": "text", "text": ...}].
+            final_text = "".join(
+                str(part.get("text", "")) for part in final_text
+                if isinstance(part, dict) and part.get("type") == "text")
+        content_calls = _content_tool_calls(final_text)
+        if content_calls:
+            messages.append({"role": "assistant", "content": final_text})
+            for fn_name, fn_args in content_calls:
+                tool_output = await dispatch_tool_execution(
+                    fn_name, fn_args, incident_id, domain_fixture, scenario_key,
+                    budget=budget, primary_domain=primary_domain, primary_url=primary_url)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": f"content-{uuid.uuid4().hex[:8]}",
+                    "name": fn_name,
+                    "content": json.dumps(tool_output)
+                })
             continue
 
         # No tool calls: the model is giving its final answer. It must be
         # validated JSON — never substring matching on free text.
-        final_text = msg.get("content", "") or ""
         state = _loop_state(incident_id)
         if not state["evidence_grounded"]:
             # Ground first: call get_incident_evidence ourselves, then ask
@@ -1019,6 +1120,8 @@ async def _run_live_nemotron_loop(
             if validation_attempts > 1:
                 raise InvestigationIncomplete(
                     "Live model produced a final assessment without grounding it in recorded evidence.")
+            # The revision request is a final-answer turn: ask for JSON.
+            final_attempt = True
             continue
         try:
             parsed_json = json.loads(final_text)
@@ -1038,6 +1141,8 @@ async def _run_live_nemotron_loop(
                 f"evidence IDs that do not exist for this incident. Error: {e}. "
                 "Reply again with a single JSON object matching the schema, citing only evidence IDs "
                 "returned by the tools for this incident.")})
+            # Retry as a final-answer turn: ask for JSON.
+            final_attempt = True
             continue
         # Validated. Record the validation success as activity, then wire
         # the assessment in (including the model's recovery-step selection

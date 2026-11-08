@@ -1,3 +1,4 @@
+import os
 import httpx
 from typing import Dict, Any
 from .config import settings
@@ -21,7 +22,16 @@ async def check_url_reputation(url: str, scenario_type: str = "ambiguous") -> Di
             "threatTypes": ["SOCIAL_ENGINEERING", "MALWARE", "UNWANTED_SOFTWARE"]
         }
         try:
-            async with httpx.AsyncClient(timeout=settings.request_timeout_sec) as client:
+            # Same proxy/CA handling as the Nemotron client: explicit proxy
+            # + verify from the environment (httpx's trust_env=True crashes
+            # on bracketed IPv6 NO_PROXY entries; trust_env=False ignores
+            # SSL_CERT_FILE).
+            proxy_url = (
+                os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+                or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+            )
+            verify = os.environ.get("SSL_CERT_FILE") or True
+            async with httpx.AsyncClient(timeout=settings.request_timeout_sec, trust_env=False, proxy=proxy_url, verify=verify) as client:
                 res = await client.get(api_url, params=params)
                 if res.status_code == 200:
                     data = res.json()
