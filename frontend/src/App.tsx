@@ -15,7 +15,6 @@ import {
   MOCK_MODE,
 } from './lib/api'
 import { useSharedState } from './lib/sync'
-import { trySpacetimeConnect, SPACETIME_HOST, type SpacetimeStatus } from './spacetimedb/client'
 import type { SandboxSession } from './lib/types'
 
 function requestedActionFor(key: string): string {
@@ -25,14 +24,15 @@ function requestedActionFor(key: string): string {
 }
 
 export default function App() {
-  const { state, update } = useSharedState()
+  const { state, update, spacetimeStatus, syncSource } = useSharedState()
   const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id)
   const [step, setStep] = useState('')
   const [busy, setBusy] = useState(false)
   const [liveError, setLiveError] = useState('')
-  const [spacetime, setSpacetime] = useState<SpacetimeStatus>('not_configured')
   const [backendMessages, setBackendMessages] = useState<Record<string, string>>({})
   const [backendHealthy, setBackendHealthy] = useState<boolean | null>(null)
+  const [backendDemoMode, setBackendDemoMode] = useState<boolean | null>(null)
+  const [scenariosLoading, setScenariosLoading] = useState(false)
   const scenario = getScenario(scenarioId)
   const incident = state.incident
   // In live mode the backend investigates its own fixture for the scenario
@@ -42,14 +42,19 @@ export default function App() {
     : scenario.text
 
   useEffect(() => {
-    trySpacetimeConnect().then(setSpacetime)
     if (!MOCK_MODE) {
-      checkBackend().then(setBackendHealthy)
-      fetchScenarios().then((list) => {
-        if (list) {
-          setBackendMessages(Object.fromEntries(list.map((s) => [s.key, s.raw_message])))
-        }
+      checkBackend().then((h) => {
+        setBackendHealthy(h.healthy)
+        setBackendDemoMode(h.demoMode)
       })
+      setScenariosLoading(true)
+      fetchScenarios()
+        .then((list) => {
+          if (list) {
+            setBackendMessages(Object.fromEntries(list.map((s) => [s.key, s.raw_message])))
+          }
+        })
+        .finally(() => setScenariosLoading(false))
     }
   }, [])
 
@@ -115,7 +120,7 @@ export default function App() {
       const session: SandboxSession = {
         id: `sandbox-${crypto.randomUUID().slice(0, 8)}`,
         accountLabel: 'Demo account alex@example.com (fictional, sandbox only)',
-        state: 'active',
+        state: 'compromised',
         createdAt: Date.now(),
         mode: 'mock',
       }
@@ -178,18 +183,21 @@ export default function App() {
           {!MOCK_MODE && (
             <span className="rounded-full bg-slate-700 px-2 py-1">
               Backend: {backendHealthy === null ? 'checking…' : backendHealthy ? 'reachable on :8000' : 'NOT reachable'}
+              {backendDemoMode === true ? ' · demo mode: simulated Nemotron' : ''}
             </span>
           )}
           <span className="rounded-full bg-slate-700 px-2 py-1">
             SpacetimeDB:{' '}
-            {spacetime === 'connected'
-              ? 'connected'
-              : spacetime === 'not_configured'
-                ? `not configured${SPACETIME_HOST ? '' : ' — demo sync only'}`
-                : spacetime}
+            {spacetimeStatus === 'connected'
+              ? 'connected (nemo-proxy)'
+              : spacetimeStatus === 'not_configured'
+                ? 'not configured — demo sync only'
+                : spacetimeStatus}
           </span>
           <span className="rounded-full bg-slate-700 px-2 py-1">
-            Demo sync: two views below share one incident (open a 2nd tab to see cross-tab sync)
+            {syncSource === 'spacetimedb'
+              ? 'Live SpacetimeDB sync: two views below share one incident'
+              : 'Demo sync: two views below share one incident (open a 2nd tab to see cross-tab sync)'}
           </span>
         </div>
       </header>
@@ -217,7 +225,11 @@ export default function App() {
               Message as received (synthetic, fictional)
               {!MOCK_MODE && backendMessages[scenario.backendKey] ? ' — backend fixture' : ''}:
             </p>
-            <p className="mt-1">{displayText}</p>
+            <p className="mt-1">
+              {scenariosLoading
+                ? 'Loading backend fixture…'
+                : displayText}
+            </p>
             {MOCK_MODE ? (
               <>
                 <p className="mt-3 text-slate-400">What is sent onward (server-side redaction preview):</p>
@@ -289,7 +301,9 @@ export default function App() {
                   <p className="mt-2 text-xs text-slate-400">
                     {incident.result.mode === 'mock'
                       ? 'This is a simulated demo verdict, not a live Nemotron result.'
-                      : 'Live backend verdict.'}{' '}
+                      : incident.result.mode === 'live-demo'
+                        ? 'Live backend verdict, but the backend is in demo mode — its Nemotron result is simulated.'
+                        : 'Live backend verdict.'}{' '}
                     If you’re unsure, check in the official app — never through the link in the message.
                   </p>
                 </div>

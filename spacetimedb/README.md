@@ -41,22 +41,28 @@ npm run typecheck   # tsc --noEmit; passes
 ```bash
 curl -sSf https://install.spacetimedb.com | sh
 cd spacetimedb
-spacetime publish nemo_proxy
+spacetime publish nemo-proxy
 ```
 
 Then point the backend at it:
 
 ```bash
 SPACETIME_HOST=http://localhost:3000   # or your SpacetimeDB Cloud host
-SPACETIME_DB=nemo_proxy
+SPACETIME_DB=nemo-proxy
 SPACETIME_TOKEN=<token>
 DEMO_MODE=false
 ```
 
 ## What is NOT verified yet
 
-- No live subscription in the React frontend yet. The frontend still
-  syncs its two views via BroadcastChannel (labelled demo sync).
+- The live SpacetimeDB subscription is wired in the React frontend
+  (`frontend/src/spacetimedb/client.ts` + `frontend/src/lib/sync.ts`,
+  generated bindings in `frontend/src/spacetimedb/`), with
+  BroadcastChannel only as a labelled fallback — but it has not yet been
+  verified end-to-end in a browser against the live server, and the
+  backend still does not write incidents to SpacetimeDB (its reducer
+  calls use the old endpoint — see below), so a live-mode investigation
+  will not yet appear in the SpacetimeDB tables.
 - **The backend's `spacetime_client.py` does NOT match this module's
   server version yet.** It calls
   `POST {host}/api/{db}/reducer/<name>`, which returns **404** against a

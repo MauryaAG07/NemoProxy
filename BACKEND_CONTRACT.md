@@ -26,7 +26,21 @@ expected label. If the backend is unreachable, the frontend reports the
 failure and offers the labelled mock — it never presents a mock result as live.
 
 ## SpacetimeDB module
-`frontend/src/spacetimedb/schema.ts` mirrors the module tables/reducers.
-The backend's `spacetime_client.py` keeps an in-memory store mirroring the
-SpacetimeDB schema and only calls live SpacetimeDB reducers when credentials
-are configured and `DEMO_MODE=false`; in mock mode it is in-memory only.
+The real module lives at `spacetimedb/src/index.ts` (tables `incident`,
+`evidence_item`, `proposed_action`, `sandbox_session`; reducers
+`create_incident`, `update_incident_verdict`, `add_evidence`,
+`propose_action`, `create_sandbox_session`, `trigger_compromise`,
+`revoke_sandbox_session`, `toggle_sim_freeze`, `ping`). It was published
+live 2026-11-08 as database `nemo-proxy` on a local SpacetimeDB 2.14.1
+server and every reducer was called via the CLI and read back with SQL —
+see `spacetimedb/README.md` ("Verified live"). `frontend/src/spacetimedb/`
+mirrors those tables/reducers (`schema.ts`) and holds the generated client
+bindings (`index.ts` plus `*_table.ts` / `*_reducer.ts`); the frontend subscribes to the live tables
+when `VITE_SPACETIMEDB_HOST` is set, with BroadcastChannel only as a
+labelled fallback. The backend's `spacetime_client.py` keeps an in-memory
+store mirroring the SpacetimeDB schema and only calls live SpacetimeDB
+reducers when credentials are configured and `DEMO_MODE=false`; in mock
+mode it is in-memory only. NOTE: the backend's reducer calls still use
+the old `POST /api/{db}/reducer/<name>` path, which returns 404 on a
+SpacetimeDB 2.x server — the working endpoint is
+`POST /v1/database/<database-identity>/call/<name>`.

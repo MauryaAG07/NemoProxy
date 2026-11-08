@@ -17,8 +17,10 @@
 //   curl -sSf https://install.spacetimedb.com | sh
 //   cd spacetimedb && spacetime publish nemo_proxy
 // Then point the backend at it with SPACETIME_HOST / SPACETIME_DB /
-// SPACETIME_TOKEN. Live publish + live reducer calls have NOT been tested
-// here — the CLI is not installed in this workspace.
+// SPACETIME_TOKEN. Live publish + live reducer calls WERE tested here on
+// 2026-11-08 against a local SpacetimeDB 2.14.1 server: published as
+// database `nemo-proxy` (identity c200645b...), and every reducer was
+// called via the CLI and read back with SQL. See README.md "Verified live".
 
 import { schema, table, t } from 'spacetimedb/server';
 

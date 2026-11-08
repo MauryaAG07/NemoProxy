@@ -25,7 +25,11 @@ export default function VerdictPanel({ result }: { result: InvestigationResult }
           Confidence: {result.confidence}
         </span>
         <span className="rounded-full bg-slate-700 px-2 py-1 text-xs text-slate-200">
-          {result.mode === 'mock' ? 'MOCK — simulated' : 'LIVE — backend / Nemotron'}
+          {result.mode === 'mock'
+            ? 'MOCK — simulated'
+            : result.mode === 'live-demo'
+              ? 'LIVE — backend (demo mode: simulated Nemotron)'
+              : 'LIVE — backend / Nemotron'}
         </span>
       </div>
       <p className="mt-3 text-slate-100">{result.summary}</p>

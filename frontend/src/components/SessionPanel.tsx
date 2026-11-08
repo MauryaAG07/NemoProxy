@@ -37,15 +37,42 @@ export default function SessionPanel({ session, busy, onSimulate, onRevoke }: Pr
             State:{' '}
             <span
               className={`rounded-full px-3 py-1 font-bold ${
-                session.state === 'revoked' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
+                session.state === 'revoked'
+                  ? 'bg-emerald-600 text-white'
+                  : session.state === 'compromised'
+                    ? 'bg-red-600 text-white'
+                    : session.state === 'active'
+                      ? 'bg-sky-600 text-white'
+                      : 'bg-slate-600 text-white'
               }`}
             >
-              {session.state === 'revoked' ? 'REVOKED — enforced in sandbox' : 'ACTIVE — compromised (simulated)'}
+              {session.state === 'revoked'
+                ? 'REVOKED — enforced in sandbox'
+                : session.state === 'compromised'
+                  ? `COMPROMISED${session.mode === 'mock' ? ' (simulated)' : ''}`
+                  : session.state === 'active'
+                    ? 'ACTIVE'
+                    : 'NO SESSION'}
             </span>{' '}
             <span className="rounded-full bg-slate-700 px-2 py-1 text-xs text-slate-200">
               {session.mode === 'mock' ? 'MOCK' : 'LIVE'}
             </span>
           </p>
+          {session.state === 'compromised' && (
+            <p className="text-red-200">
+              Controlled simulated compromise event on the fictional sandbox account — this
+              does not mean a real session was stolen.
+            </p>
+          )}
+          {session.state === 'compromised' && (
+            <button
+              onClick={onRevoke}
+              disabled={busy}
+              className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+            >
+              Revoke session (sandbox)
+            </button>
+          )}
           {session.state === 'active' && (
             <button
               onClick={onRevoke}
