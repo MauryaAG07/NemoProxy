@@ -1,7 +1,7 @@
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -12,11 +12,23 @@ from .config import settings
 from .incident import SCENARIO_CATALOG, execute_investigation_pipeline, redact_message
 from .spacetime_client import (
     get_current_state,
+    get_sandbox_session,
     trigger_compromise,
     revoke_session,
-    toggle_sim_freeze,
     ensure_demo_session,
+    issue_session_credential,
+    verify_session_credential,
+    reset_demo_session,
 )
+
+# Phase B (spec §6): the demo session credential lives in this HttpOnly
+# cookie only. It is set by POST /api/session/issue (and reset) and
+# sent back only to /api/account/* (Path=/api/account). The raw
+# credential never appears in a JSON body, /api/state, or server logs.
+# Secure=False because the demo runs over local http; a production
+# deployment must set Secure=True. SameSite=Lax is sufficient here
+# because the Vite dev server and the backend share the localhost site.
+_SESSION_COOKIE = "nemo_session"
 
 # In-memory rate limiter (slowapi default storage). Applied to /api/ingest.
 limiter = Limiter(key_func=get_remote_address)
@@ -65,7 +77,7 @@ def require_demo_key(x_demo_key: Optional[str] = Header(None)):
 
 
 class IngestRequest(BaseModel):
-    scenario: str = Field(..., description="One of: 'phishing', 'legitimate', 'ambiguous'")
+    scenario: str = Field(..., description="One of: 'phishing', 'legitimate', 'ambiguous', 'injection'")
     user_id: Optional[str] = Field(None, description="Client-provided hint; ignored for server-side ownership")
 
 class RevokeRequest(BaseModel):
@@ -74,6 +86,65 @@ class RevokeRequest(BaseModel):
     reason: str = Field(
         "Operator enforced session revocation following investigation.",
         max_length=settings.max_message_len,
+    )
+    # Optional client-supplied idempotency key. Repeating a revocation
+    # with the same key is a no-op (one receipt, state unchanged).
+    idempotency_key: Optional[str] = None
+
+
+class ProtectRequest(BaseModel):
+    """Customer 'Protect demo account' request (Phase B, spec §6)."""
+    session_id: str = "sess_demo_carrier_01"
+    reason: str = Field(
+        "Customer chose 'Protect demo account' after a synthetic compromise event.",
+        max_length=settings.max_message_len,
+    )
+    idempotency_key: Optional[str] = None
+    incident_id: str = ""
+
+
+# Fictional carrier account overview (Phase B, spec §6). ALL synthetic:
+# no real carrier data, no real account. Served only to a request that
+# presents a valid demo session credential for the sandbox session.
+_FICTIONAL_ACCOUNT_OVERVIEW = {
+    "account_id": "acct_tm_94821",
+    "phone_masked": "+1 (214) •••-4102",
+    "plan_name": "Magenta Plus — fictional sandbox plan",
+    "balance_due_usd": 85.00,
+    "data_used_gb": 18.4,
+    "data_allowance_gb": 50.0,
+    "lines": 1,
+    "synthetic": True,
+    "notice": (
+        "Fictional sandbox account overview — synthetic data only, not a "
+        "real carrier account. Enforcement here is against the fictional "
+        "sandbox session only, not a real carrier session."
+    ),
+}
+
+
+def _extract_session_credential(request: Request) -> Optional[str]:
+    """Session credential from the HttpOnly cookie, or an Authorization:
+    Bearer header (curl / non-browser clients). The raw value is used
+    only for hashing inside verify_session_credential — never logged."""
+    cookie_value = request.cookies.get(_SESSION_COOKIE)
+    if cookie_value:
+        return cookie_value
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip() or None
+    return None
+
+
+def _set_session_cookie(response: Response, issued: dict) -> None:
+    response.set_cookie(
+        _SESSION_COOKIE,
+        issued["raw_credential"],
+        max_age=issued["expires_in_seconds"],
+        httponly=True,
+        samesite="lax",
+        path="/api/account",
+        secure=False,  # local-http demo only; production must use Secure=True
     )
 
 @app.get("/api/health")
@@ -163,20 +234,135 @@ async def simulate_compromise(_key: None = Depends(require_demo_key)):
 
 @app.post("/api/session/revoke")
 async def revoke_active_session(req: RevokeRequest, _key: None = Depends(require_demo_key)):
-    """Enforces authoritative backend session revocation."""
-    sess = await revoke_session(req.session_id, req.reason)
+    """Enforces authoritative backend session revocation.
+
+    Phase B: migrated to the approved flow — propose_action (type
+    "revoke_session") → approve_action → revoke_session, all with the
+    same idempotency key. The old direct-revoke behaviour (one call,
+    session revoked) is preserved from the caller's point of view; the
+    response now also carries the action_id, idempotency_key, receipt
+    and source. A repeat with the same idempotency_key is a no-op.
+    """
+    try:
+        result = await revoke_session(req.session_id, req.reason, idempotency_key=req.idempotency_key)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Approved revocation failed: {e}")
     return {
         "status": "success",
         "event": "sandbox_session_revoked",
-        "session": sess
+        "session": result["session"],
+        "action_id": result["action_id"],
+        "idempotency_key": result["idempotency_key"],
+        "receipt": result["receipt"],
+        "source": result["source"],
     }
 
-@app.post("/api/session/toggle_sim_freeze")
-async def toggle_freeze(_key: None = Depends(require_demo_key)):
-    """Toggles SIM freeze protection."""
-    sess = await toggle_sim_freeze()
+@app.post("/api/session/protect")
+async def protect_demo_account(req: ProtectRequest, _key: None = Depends(require_demo_key)):
+    """Customer 'Protect demo account' (Phase B, spec §6 step 3–4).
+
+    The same approved flow as /api/session/revoke: the backend proposes
+    a "revoke_session" action for THIS session, approves it as the
+    operator identity, then executes the revocation — all bound to one
+    idempotency key. The model may propose revocation but cannot approve
+    it; approval here is the operator/backend identity, never a model
+    tool call.
+    """
+    try:
+        result = await revoke_session(
+            req.session_id, req.reason,
+            idempotency_key=req.idempotency_key, incident_id=req.incident_id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Approved revocation failed: {e}")
     return {
         "status": "success",
-        "sim_freeze_enabled": sess.get("sim_freeze_enabled", False) if sess else False,
-        "session": sess
+        "event": "sandbox_session_revoked_via_approved_action",
+        "session": result["session"],
+        "action_id": result["action_id"],
+        "idempotency_key": result["idempotency_key"],
+        "receipt": result["receipt"],
+        "source": result["source"],
+        "explanation": (
+            "Approval was bound to this action and session (propose → "
+            "approve → revoke, one idempotency key); the model cannot "
+            "approve a revocation itself."
+        ),
+    }
+
+@app.post("/api/session/issue")
+async def issue_demo_credential(response: Response, _key: None = Depends(require_demo_key)):
+    """Issue a fresh demo session credential (Phase B, spec §6).
+
+    Generates a random opaque credential (30-minute expiry), stores
+    ONLY its SHA-256 hash in SpacetimeDB, and returns the raw value
+    solely as an HttpOnly cookie ("nemo_session", Path=/api/account).
+    The raw credential is NOT in this response body, NOT in /api/state,
+    and NOT in server logs. Refuses (503) when the session is revoked
+    — reset the demo run first — or the session store is unreachable.
+    """
+    issued = await issue_session_credential()
+    if issued is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not issue a session credential (session may be revoked — reset the demo run — or the session store is unreachable).",
+        )
+    _set_session_cookie(response, issued)
+    return {
+        "status": "success",
+        "session_id": issued["session_id"],
+        "credential_issued": True,
+        "expires_at_ms": issued["expiry_ms"],
+        "expires_in_seconds": issued["expires_in_seconds"],
+        "notice": (
+            "Raw credential is in the HttpOnly 'nemo_session' cookie only; "
+            "it is not in this response body, /api/state, or server logs."
+        ),
+    }
+
+@app.post("/api/session/reset")
+async def reset_demo_run_endpoint(response: Response, _key: None = Depends(require_demo_key)):
+    """Reset the demo run (Phase B): clears incidents/evidence/actions
+    in SpacetimeDB, flips the demo session back to active, invalidates
+    the old credential, and issues a fresh credential (new HttpOnly
+    cookie). The previous credential stops working immediately.
+    """
+    ok = await reset_demo_session()
+    if not ok:
+        raise HTTPException(status_code=503, detail="Demo reset failed: SpacetimeDB unreachable.")
+    issued = await issue_session_credential()
+    if issued is None:
+        raise HTTPException(status_code=503, detail="Demo reset succeeded but issuing a fresh credential failed.")
+    _set_session_cookie(response, issued)
+    sess = await get_sandbox_session()
+    return {
+        "status": "success",
+        "event": "demo_run_reset",
+        "session": sess,
+        "credential_issued": True,
+        "expires_at_ms": issued["expiry_ms"],
+        "expires_in_seconds": issued["expires_in_seconds"],
+    }
+
+@app.get("/api/account/overview")
+async def get_account_overview(request: Request):
+    """Harmless protected resource (Phase B, spec §6): a fictional
+    carrier account overview. Every request must present the demo
+    session credential (HttpOnly cookie or Authorization: Bearer) and
+    pass server-side verification against SpacetimeDB: hash match,
+    unexpired, session usable (active / compromised_sim). Revoked,
+    expired, wrong, or missing credentials get 401; if SpacetimeDB
+    cannot be reached the request is denied with 503 — never allowed
+    through. No real carrier data is involved.
+    """
+    credential = _extract_session_credential(request)
+    result = await verify_session_credential("sess_demo_carrier_01", credential)
+    if not result["ok"]:
+        raise HTTPException(status_code=result["status"], detail=result["reason"])
+    return {
+        **_FICTIONAL_ACCOUNT_OVERVIEW,
+        "session_id": "sess_demo_carrier_01",
+        "session_state": result["session_state"],
+        "verification_source": result["source"],
+        "credential_expires_at_ms": result["expiry_ms"],
     }

@@ -60,6 +60,13 @@ class AppSettings(BaseModel):
     max_message_len: int = 1000
     request_timeout_sec: float = 15.0
 
+    # Phase C (spec §4): investigation budgets for the Nemotron tool
+    # loop. Env-overridable so a test can force budget exhaustion
+    # (e.g. INVESTIGATION_MAX_TOOL_CALLS=2) without editing code.
+    investigation_max_rounds: int = Field(default_factory=lambda: int(os.getenv("INVESTIGATION_MAX_ROUNDS", "4")))
+    investigation_max_tool_calls: int = Field(default_factory=lambda: int(os.getenv("INVESTIGATION_MAX_TOOL_CALLS", "12")))
+    investigation_timeout_seconds: float = Field(default_factory=lambda: float(os.getenv("INVESTIGATION_TIMEOUT_SECONDS", "60")))
+
     def has_nvidia_creds(self) -> bool:
         return bool(self.nvidia_api_key and self.nvidia_api_key != "your-nvidia-api-key")
 
