@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+.env
+node_modules/
+frontend/node_modules/
+spacetimedb/node_modules/
+__pycache__/
+.venv/
+
+.DS_Store
+.idea/

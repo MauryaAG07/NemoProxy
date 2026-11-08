@@ -203,7 +203,7 @@ export default function App() {
 
     // Live path: poll GET /api/state; never fall back silently to mock.
     setStep('Waiting for the backend investigation…')
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 130; i++) {
       await new Promise((r) => setTimeout(r, 1000))
       const result = await fetchIncidentResult(
         incidentId,

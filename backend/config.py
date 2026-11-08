@@ -24,8 +24,8 @@ def _env_list(name: str, default: list) -> list:
 class AppSettings(BaseModel):
     # NVIDIA Nemotron
     nvidia_api_key: str = Field(default_factory=lambda: os.getenv("NVIDIA_API_KEY", ""))
-    nvidia_base_url: str = Field(default_factory=lambda: os.getenv("NVIDIA_BASE_URL", "https://api.nvidia.com/v1"))
-    nvidia_model_id: str = Field(default_factory=lambda: os.getenv("NVIDIA_MODEL_ID", "nvidia/nemotron-3-nano-30b-a3b"))
+    nvidia_base_url: str = Field(default_factory=lambda: os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"))
+    nvidia_model_id: str = Field(default_factory=lambda: os.getenv("NVIDIA_MODEL_ID", "nvidia/nemotron-3.5-lightning-30b-a3b"))
 
     # SpacetimeDB
     # NOTE: database names cannot contain underscores — use "nemo-proxy".
