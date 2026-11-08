@@ -280,6 +280,11 @@ def _mirror_incident(incident_id: str) -> Dict[str, Any]:
         "assessment": status.get("assessment"),
         "created_at": event.get("created_at", int(time.time() * 1000)),
         "live_failure": bool(status.get("live_failure", False)),
+        # Timings (spec §10): server-side investigation wall time in
+        # ms; null until the final assessment is published.
+        "investigation_started_at_ms": status.get("investigation_started_at_ms"),
+        "investigation_finished_at_ms": status.get("investigation_finished_at_ms"),
+        "investigation_duration_ms": status.get("investigation_duration_ms"),
     }
 
 
@@ -343,6 +348,16 @@ async def spacetime_create_incident(incident_id: str, scenario_id: str, redacted
         "version": 0,
         "updated_at": now_ms,
         "live_failure": False,
+        # Timings (spec §10): server-side investigation clock. Start is
+        # recorded here when the pipeline begins; finish/duration are
+        # set by spacetime_update_incident. Float ms (epoch) — the
+        # demo-mode simulated loop runs in under a millisecond, so int
+        # ms would round its duration to 0. Mirror-only — the §5 schema
+        # has no duration column, so live rows carry these from the
+        # mirror too (see get_current_state). Never fabricated.
+        "investigation_started_at_ms": time.time() * 1000,
+        "investigation_finished_at_ms": None,
+        "investigation_duration_ms": None,
     }
 
     if _live_enabled():
@@ -452,6 +467,9 @@ async def spacetime_update_incident(
             )
 
     if incident_id in _STATE["investigation_statuses"]:
+        _mirror_status = _STATE["investigation_statuses"][incident_id]
+        _finished_ms = time.time() * 1000
+        _started_ms = _mirror_status.get("investigation_started_at_ms")
         _STATE["investigation_statuses"][incident_id].update({
             "phase": status,
             "verdict": verdict,
@@ -460,8 +478,18 @@ async def spacetime_update_incident(
             "unknowns": unknowns,
             "assessment": assessment,
             "version": expected_version + 1,
-            "updated_at": int(time.time() * 1000),
+            "updated_at": int(_finished_ms),
             "live_failure": live_failure,
+            # Timings (spec §10): finish when the final assessment (or
+            # failed/incomplete outcome) is published. Duration is the
+            # server-side pipeline wall time: redaction + Nemotron tool
+            # loop + commit. Null when the start was never recorded
+            # (e.g. an incident created before this field existed).
+            "investigation_finished_at_ms": _finished_ms,
+            "investigation_duration_ms": (
+                _finished_ms - float(_started_ms)
+                if isinstance(_started_ms, (int, float)) else None
+            ),
         })
 
 
@@ -616,6 +644,11 @@ async def get_current_state() -> Dict[str, Any]:
                     "created_at": event.get("created_at", 0),
                     # Merge mirror-only flags (e.g. live_failure) into live rows.
                     "live_failure": bool(mirror.get("live_failure", False)),
+                    # Timings (spec §10): no §5 column exists, so live
+                    # rows carry the mirror's server-side timings.
+                    "investigation_started_at_ms": mirror.get("investigation_started_at_ms"),
+                    "investigation_finished_at_ms": mirror.get("investigation_finished_at_ms"),
+                    "investigation_duration_ms": mirror.get("investigation_duration_ms"),
                 })
             live["incidents"] = incidents
             live["evidence_items"] = [

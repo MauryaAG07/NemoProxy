@@ -17,7 +17,15 @@ mode and in live mode against a local SpacetimeDB 2.14.1 server on
     `{ incident_id, scenario_id, status: "investigating"|"assessed"|"failed"|"incomplete",
        verdict: "suspected_phishing"|"benign_indicator"|"insufficient_evidence"|"pending",
        confidence_band: "low"|"medium"|"high", summary, redacted_message,
-       unknowns, assessment }`
+       unknowns, assessment,
+       investigation_started_at_ms, investigation_finished_at_ms,
+       investigation_duration_ms }`
+    Timings (spec §10): `investigation_duration_ms` is the server-side
+    pipeline wall time (redaction + Nemotron tool loop + commit), in ms;
+    null until the final assessment is published. The frontend measures
+    DB-to-client latency itself as the time from
+    `investigation_finished_at_ms` to the result first appearing in the
+    browser, and shows both numbers in the operator view only.
     `incomplete` (Phase C) = budget exhausted or model output that failed
     structured validation after one retry: partial evidence is kept, no
     verdict is produced, and no simulated verdict is substituted.
