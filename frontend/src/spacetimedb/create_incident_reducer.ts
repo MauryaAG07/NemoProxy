@@ -12,6 +12,7 @@ import {
 
 export default {
   incidentId: __t.string(),
+  ownerId: __t.string(),
+  sanitizedMessage: __t.string(),
   scenarioId: __t.string(),
-  redactedMessage: __t.string(),
 };

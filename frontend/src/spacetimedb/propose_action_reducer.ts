@@ -13,6 +13,7 @@ import {
 export default {
   actionId: __t.string(),
   incidentId: __t.string(),
-  actionType: __t.string(),
-  reason: __t.string(),
+  sessionId: __t.string(),
+  type: __t.string(),
+  idempotencyKey: __t.string(),
 };
