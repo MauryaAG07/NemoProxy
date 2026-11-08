@@ -167,8 +167,8 @@ class StructuredAssessment(BaseModel):
         known = {item["id"] for item in RECOVERY_CHECKLIST_CATALOG}
         unknown = [s for s in v if s not in known]
         if unknown:
-            raise ValueError(f"Unknown recovery step IDs: {unknown}")
-        return v
+            logger.warning("Dropping unknown recovery step IDs from model output: %s", unknown)
+        return [s for s in v if s in known]
 
 
 # concern_level -> (backend verdict, confidence_band)
@@ -1022,6 +1022,7 @@ async def _run_live_nemotron_loop(
         "fixture as a live Google Web Risk or other provider result. If you cite simulated evidence, your explanation "
         "must use the word 'simulated'. "
         "Always select applicable recovery steps from the catalog (recovery_step_ids), even when the concern is low. "
+        "Valid recovery step IDs are exactly: step_review_carrier_protections, step_change_password, step_enable_pin_passcode, step_review_recent_activity, step_report_message. Never invent other IDs. "
         "If the evidence does not settle the question, return concern_level 'inconclusive' with the unknowns named — do not guess. "
         "You MUST call get_incident_evidence before producing your final assessment, so it is grounded in recorded evidence. "
         "Your final answer MUST be a single JSON object matching this schema (no extra prose, no 0-100 probability, no confidence number): "
@@ -1059,6 +1060,7 @@ async def _run_live_nemotron_loop(
         }
         if final_attempt or force_final:
             payload["response_format"] = {"type": "json_object"}
+        payload["max_tokens"] = 3600
         # External host: take the proxy and CA bundle from the environment
         # explicitly. httpx's default trust_env=True crashes on this VM's
         # NO_PROXY list (bracketed IPv6 entries -> "Invalid port: ':1]'"),
@@ -1072,12 +1074,22 @@ async def _run_live_nemotron_loop(
         verify = os.environ.get("SSL_CERT_FILE") or True
         # 60 s per call: the live model can take 30+ s on a single slow turn
         # (one injection run died on the old 30 s limit with a ReadTimeout).
-        async with httpx.AsyncClient(timeout=60, trust_env=False, proxy=proxy_url, verify=verify) as client:
-            resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        _t0 = time.monotonic()
+        data = None
+        for _attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=50, trust_env=False, proxy=proxy_url, verify=verify) as client:
+                    resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                break
+            except httpx.ReadTimeout:
+                if _attempt == 1:
+                    raise
+                logger.warning("Nemotron call hit a 50 s read timeout; retrying once.")
 
         choice = data["choices"][0]
+        logger.warning("Nemotron call done in %.1fs finish_reason=%s usage=%s", time.monotonic() - _t0, choice.get("finish_reason"), data.get("usage"))
         msg = choice["message"]
         tool_calls = msg.get("tool_calls")
 
