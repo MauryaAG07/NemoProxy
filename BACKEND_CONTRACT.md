@@ -153,7 +153,7 @@ text. The model must return a single JSON object validated against
   proposes NO action for it, the `response_action` table stays empty
   for that incident, and the session stays active.
 - Budgets: max rounds (default 4), max total tool calls (default 12),
-  wall-clock timeout (default 60 s) — env-overridable
+  wall-clock timeout (default 120 s) — env-overridable
   (`INVESTIGATION_MAX_ROUNDS` / `INVESTIGATION_MAX_TOOL_CALLS` /
   `INVESTIGATION_TIMEOUT_SECONDS`, see `backend/config.py`). Forcing
   exhaustion in a test: run a second backend with
