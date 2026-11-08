@@ -41,7 +41,7 @@ egress proxy blocks api.nvidia.com).
   is `incomplete`. The verdict is never extracted by substring matching.
 - The simulated loop (demo mode) produces the SAME validated assessment,
   so the schema/validation code is exercised without a key.
-- Budgets: 4 rounds, 12 tool calls, 60 s wall clock by default
+- Budgets: 6 rounds, 12 tool calls, 60 s wall clock by default
   (env: `INVESTIGATION_MAX_ROUNDS`, `INVESTIGATION_MAX_TOOL_CALLS`,
   `INVESTIGATION_TIMEOUT_SECONDS`). Exhaustion → `incomplete` with
   partial evidence kept. Force it in a test: run a second backend with
