@@ -75,12 +75,18 @@ async function fetchJson(path: string, init?: RequestInit, timeoutMs = 5000) {
   }
 }
 
-export async function checkBackend(): Promise<boolean> {
+export interface BackendHealth {
+  healthy: boolean
+  /** True when the backend reports demo_mode: its Nemotron/reputation results are simulated. */
+  demoMode: boolean
+}
+
+export async function checkBackend(): Promise<BackendHealth> {
   try {
     const data = await fetchJson('/api/health', undefined, 3000)
-    return data.status === 'healthy'
+    return { healthy: data.status === 'healthy', demoMode: data.demo_mode === true }
   } catch {
-    return false
+    return { healthy: false, demoMode: false }
   }
 }
 
@@ -132,7 +138,9 @@ function mapConfidence(band: string): 'low' | 'medium' | 'high' {
   return 'low'
 }
 
-/** Poll GET /api/state for a finished result. Null = not ready / unreachable. */
+/** Poll GET /api/state for a finished result. Null = not ready / unreachable.
+ * The result mode is 'live' only when the backend is NOT in demo mode;
+ * a demo-mode backend returns simulated Nemotron results, labelled 'live-demo'. */
 export async function fetchIncidentResult(
   incidentId: string,
   claimedOrg: string,
@@ -140,6 +148,7 @@ export async function fetchIncidentResult(
 ): Promise<InvestigationResult | null> {
   if (MOCK_MODE) return null
   try {
+    const health = await checkBackend()
     const data = await fetchJson('/api/state')
     const incidents = (data.incidents ?? []) as Record<string, unknown>[]
     const inc = incidents.find((i) => i.incident_id === incidentId)
@@ -171,7 +180,7 @@ export async function fetchIncidentResult(
       uncertainty: (split[1] ?? '').trim() ||
         'Domain age, hosting and brand mismatch are indicators, not proof a reverse proxy exists or a session was stolen.',
       evidence,
-      mode: 'live',
+      mode: health.demoMode ? 'live-demo' : 'live',
       reputationUrlNote:
         'Reputation result, if any, applies to the redacted/modified URL, not the original.',
     }
@@ -185,7 +194,17 @@ function mapSession(s: Record<string, unknown>, mode: 'live' | 'mock'): SandboxS
   return {
     id: String(s.session_id ?? 'sess_demo_carrier_01'),
     accountLabel: `${String(s.device_label ?? 'Sandbox device')} · ${String(s.account_id ?? '')} (fictional, sandbox only)`,
-    state: status === 'revoked' ? 'revoked' : status === 'compromised_sim' ? 'active' : 'none',
+    // Backend states are distinct: 'active' (normal), 'compromised_sim'
+    // (controlled simulated compromise), 'revoked'. Never collapse
+    // compromised_sim into 'active' or 'active' into 'none'.
+    state:
+      status === 'revoked'
+        ? 'revoked'
+        : status === 'compromised_sim'
+          ? 'compromised'
+          : status === 'active'
+            ? 'active'
+            : 'none',
     createdAt: Date.now(),
     revokedAt: status === 'revoked' ? Date.now() : undefined,
     mode,

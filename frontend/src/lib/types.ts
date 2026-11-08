@@ -1,5 +1,5 @@
 // Shared types for NemoProxy. Keep these in sync with the backend
-// (backend/main.py) and the SpacetimeDB module (spacetimedb/schema.ts).
+// (backend/main.py) and the SpacetimeDB module (spacetimedb/src/index.ts).
 // Expected labels live ONLY in scenarios.ts and are never sent to Nemotron.
 
 export type Verdict =
@@ -32,8 +32,10 @@ export interface InvestigationResult {
   summary: string
   uncertainty: string
   evidence: EvidenceItem[]
-  /** 'mock' = labelled demo path, no live Nemotron call. 'live' = backend/Nemotron. */
-  mode: 'mock' | 'live'
+  /** 'mock' = labelled demo path, no live Nemotron call. 'live' = backend/Nemotron.
+   * 'live-demo' = backend reachable but in demo mode (simulated Nemotron),
+   * so a live-mode result must NOT be labelled as a live Nemotron result. */
+  mode: 'mock' | 'live' | 'live-demo'
   reputationUrlNote?: string
 }
 
@@ -46,7 +48,7 @@ export interface Incident {
   error?: string
 }
 
-export type SessionState = 'none' | 'active' | 'revoked'
+export type SessionState = 'none' | 'active' | 'compromised' | 'revoked'
 
 export interface SandboxSession {
   id: string
